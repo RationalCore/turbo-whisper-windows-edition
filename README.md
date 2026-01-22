@@ -42,6 +42,50 @@ Turbo Whisper is ideal for voice input with terminal-based AI tools:
 
 Simply press the hotkey, speak your prompt, and the transcription is typed directly into your terminal.
 
+### Claude Code Integration
+
+When dictating into Claude Code, you may want to wait until Claude finishes responding before typing your text. Turbo Whisper has built-in support for this.
+
+**How it works:**
+1. Turbo Whisper runs an HTTP server on `localhost:7878`
+2. After transcription, it waits up to 2 seconds for a "ready" signal
+3. When Claude Code sends the signal, the text is typed
+
+**Setup:**
+
+1. Enable in your config (`~/.config/turbo-whisper/config.json`):
+```json
+{
+  "claude_integration": true,
+  "claude_integration_port": 7878
+}
+```
+
+2. Create a Claude Code hook at `~/.claude/hooks/post-response.sh`:
+```bash
+#!/bin/bash
+# Signal Turbo Whisper that Claude is ready for input
+curl -s -X POST http://localhost:7878/ready > /dev/null 2>&1
+```
+
+3. Make it executable:
+```bash
+chmod +x ~/.claude/hooks/post-response.sh
+```
+
+4. Configure Claude Code to run the hook (in `~/.claude/settings.json`):
+```json
+{
+  "hooks": {
+    "postResponse": ["~/.claude/hooks/post-response.sh"]
+  }
+}
+```
+
+**Without the hook:** If Claude integration is enabled but no ready signal is received within 2 seconds, the text is copied to clipboard only (not typed). You'll see "Copied (Claude busy)" in the tray notification.
+
+**To disable:** Set `"claude_integration": false` in your config for immediate typing without waiting.
+
 ## Installation
 
 ### Ubuntu/Debian (PPA) - Recommended
