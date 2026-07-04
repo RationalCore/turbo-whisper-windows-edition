@@ -1,0 +1,28 @@
+= Turbo Whisper Troubleshooting
+:source-highlighter: coderay
+:experimental:
+
+== Windows Troubleshooting
+
+|===
+| Problem | Solution
+
+| PyAudio installation fails
+| Run `pip install pipwin && pipwin install pyaudio` to use pre-built wheels.
+
+| Hotkey doesn't work in fullscreen apps
+| Some fullscreen applications (games) block global hotkeys. Try running the app as administrator.
+
+| Text not typed into window
+| The application uses multiple fallback methods. If auto-paste fails, the text is still copied to clipboard. Paste manually with Ctrl+V.
+
+| Multiple instances running
+| Run in PowerShell: `powershell -Command "Get-Process | Where-Object { $_.ProcessName -like '*turbo*whisper*' } | Stop-Process -Force"`
+
+| Config not found
+| Create `%APPDATA%\turbo-whisper\config.json` with the required settings.
+
+| No audio input detected
+| Check Windows microphone permissions and ensure your microphone is not muted.
+
+|===

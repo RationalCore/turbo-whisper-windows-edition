@@ -1,0 +1,37 @@
+= Turbo Whisper Solution Design
+:source-highlighter: coderay
+:experimental:
+
+== Windows Architecture
+
+Turbo Whisper uses the following Windows-specific technologies:
+
+=== Global Hotkey
+
+* Uses `RegisterHotKey` WinAPI via `ctypes` (`hotkey.py` - `WinApiHotkeyManager`)
+* Handles both modifier combos (Ctrl+Shift+Space) and single keys (tilde `~`)
+* Polls `GetMessage` in a background thread
+
+=== Auto-typing
+
+Multiple fallback methods for reliable paste into any application:
+
+. `keybd_event` - Send Ctrl+V keystrokes
+. `WM_PASTE` - Direct window message
+. `SendInput` - Modern input injection
+. `pynput` - Cross-platform fallback
+. `pyautogui` - Last resort
+
+=== Clipboard
+
+* Primary: `pyperclip`
+* Fallback: `clip.exe` (Windows built-in)
+* Encoding detection via `chardet` for Unicode support
+
+=== Process Locking
+
+Uses `msvcrt.locking()` on a file in `%TEMP%` to prevent multiple instances.
+
+=== JSON API Mode
+
+Supports `use_json_api: true` for LLM aggregators like RouterAI.ru that use JSON+base64 payload format instead of standard multipart/form-data.

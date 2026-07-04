@@ -1,0 +1,58 @@
+= Turbo Whisper Installation Guide
+:source-highlighter: coderay
+:experimental:
+
+== Windows Installation
+
+=== Prerequisites
+
+* Python 3.10 or later (https://www.python.org/downloads/[download])
+* Git for Windows (https://git-scm.com/download/win[download])
+
+=== Step-by-step
+
+. Clone the repository:
++
+[source,powershell]
+----
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition.git
+cd turbo-whisper-windows-edition
+----
+
+. Create virtual environment:
++
+[source,powershell]
+----
+python -m venv .venv
+.venv\Scripts\activate
+----
+
+. Install dependencies:
++
+[source,powershell]
+----
+pip install -e .
+pip install pyperclip
+----
+
+== Quick Start
+
+Double-click `run_turbo_whisper.bat` in the project root.
+
+== Configuration
+
+The config file is located at `%APPDATA%\turbo-whisper\config.json`.
+
+== Troubleshooting
+
+=== PyAudio installation fails
+
+[source,powershell]
+----
+pip install pipwin
+pipwin install pyaudio
+----
+
+=== No audio devices
+
+Ensure your microphone is plugged in and recognized by Windows.
