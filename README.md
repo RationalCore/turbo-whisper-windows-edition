@@ -52,6 +52,7 @@ pip install pyperclip  # Required for Windows clipboard/typing
 
 Create `%APPDATA%\turbo-whisper\config.json` (Windows). For a full list of all available settings with their defaults, see [`config.example.json`](config.example.json).
 
+**Single key — tilde (one-press recording):**
 ```json
 {
   "api_url": "https://api.openai.com/v1/audio/transcriptions",
@@ -59,16 +60,34 @@ Create `%APPDATA%\turbo-whisper\config.json` (Windows). For a full list of all a
   "hotkey": ["~"],
   "language": "en",
   "auto_paste": true,
-  "copy_to_clipboard": true
+  "copy_to_clipboard": true,
+  "typing_delay_ms": 5,
+  "waveform_color": "#00ff88",
+  "background_color": "#1a1a2e"
 }
 ```
 
-> **Hotkey `~` (tilde):** Bound to physical key code, not layout character. On Russian layout it's `ё`, on English — `` ` `` (backtick), with Shift — `~`. Works regardless of active keyboard layout.
+> **Hotkey `~` (tilde) note:** The hotkey is bound to the physical key code, not to the layout character. On a Russian layout it's `ё`, on English — `` ` `` (backtick) with Shift — `~`, etc. Regardless of the active keyboard layout, the key will be handled correctly.
+
+**Modifier combination — Ctrl+Shift+Space (to avoid conflicts):**
+```json
+{
+  "api_url": "https://api.openai.com/v1/audio/transcriptions",
+  "api_key": "sk-your-api-key",
+  "hotkey": ["ctrl", "shift", "space"],
+  "language": "en",
+  "auto_paste": true,
+  "copy_to_clipboard": true,
+  "typing_delay_ms": 5,
+  "waveform_color": "#00ff88",
+  "background_color": "#1a1a2e"
+}
+```
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details. Inspired by [SuperWhisper](https://superwhisper.com/).
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## Credits
 
-This is a Windows-adapted fork focused on reliable, error-free operation on Windows using native WinAPI.
+Inspired by [SuperWhisper](https://superwhisper.com/). This is a Windows-adapted fork focused on reliable, error-free operation on Windows using native WinAPI.
