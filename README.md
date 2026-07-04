@@ -15,6 +15,10 @@ Turbo Whisper is a **free, open source** voice dictation and transcription app f
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)
+![AUR](https://img.shields.io/aur/version/turbo-whisper)
+![PPA](https://img.shields.io/badge/PPA-bengweeks%2Fturbo--whisper-orange)
+
+[Screencast_20260122_152835.webm](https://github.com/user-attachments/assets/0d53b4d5-377c-49bb-9463-24cdfdc02946)
 
 ## Features
 
@@ -28,14 +32,151 @@ Turbo Whisper is a **free, open source** voice dictation and transcription app f
 - **Cross-platform** - Linux, macOS, and Windows support
 - **Accessibility** - great for RSI, carpal tunnel, or anyone preferring hands-free input
 
+## Perfect for AI CLI Tools
+
+Turbo Whisper is ideal for voice input with terminal-based AI tools:
+
+- **[Claude Code](https://github.com/anthropics/claude-code)** - Anthropic's CLI for Claude
+- **[Aider](https://github.com/paul-gauthier/aider)** - AI pair programming in your terminal
+- **[GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli)** - Voice commands for git and shell
+- **[Open Interpreter](https://github.com/OpenInterpreter/open-interpreter)** - Natural language to code execution
+- **Any terminal app** - Works anywhere you can type text
+
+Simply press the hotkey, speak your prompt, and the transcription is typed directly into your terminal.
+
+### Claude Code Integration (Experimental)
+
+> **Note:** This feature is experimental and has limitations. See [issue #23](https://github.com/knowall-ai/turbo-whisper/issues/23) for planned improvements.
+
+When dictating into Claude Code, you may want to wait until Claude finishes responding before typing your text. Turbo Whisper has built-in support for this.
+
+**How it works:**
+1. Turbo Whisper runs an HTTP server on `localhost:7878`
+2. After transcription, it waits up to 2 seconds for a "ready" signal
+3. When Claude Code sends the signal, the text is typed
+
+**Setup:**
+
+1. Enable in your config (`~/.config/turbo-whisper/config.json`):
+```json
+{
+  "claude_integration": true,
+  "claude_integration_port": 7878
+}
+```
+
+2. Create a Claude Code hook at `~/.claude/hooks/post-response.sh`:
+```bash
+#!/bin/bash
+# Signal Turbo Whisper that Claude is ready for input
+curl -s -X POST http://localhost:7878/ready > /dev/null 2>&1
+```
+
+3. Make it executable:
+```bash
+chmod +x ~/.claude/hooks/post-response.sh
+```
+
+4. Configure Claude Code to run the hook (in `~/.claude/settings.json`):
+```json
+{
+  "hooks": {
+    "postResponse": ["~/.claude/hooks/post-response.sh"]
+  }
+}
+```
+
+**Without the hook:** If Claude integration is enabled but no ready signal is received within 2 seconds, the text is copied to clipboard only (not typed). You'll see "Copied (Claude busy)" in the tray notification.
+
+**To disable:** Set `"claude_integration": false` in your config for immediate typing without waiting.
+
 ## Installation
+
+### Ubuntu/Debian (PPA) - Recommended
+
+```bash
+sudo add-apt-repository ppa:bengweeks/turbo-whisper
+sudo apt update
+sudo apt install turbo-whisper
+```
+
+### Arch Linux (AUR) - Recommended
+
+```bash
+# Using yay
+yay -S turbo-whisper
+
+# Using paru
+paru -S turbo-whisper
+```
+
+### From Source
+
+<details>
+<summary>Ubuntu/Debian</summary>
+
+```bash
+# Install system dependencies
+sudo apt install python3-pyaudio portaudio19-dev xdotool xclip
+
+# Clone and install
+git clone https://github.com/knowall-ai/turbo-whisper.git
+cd turbo-whisper
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+</details>
+
+<details>
+<summary>Fedora</summary>
+
+```bash
+sudo dnf install python3-pyaudio portaudio-devel xdotool xclip
+git clone https://github.com/knowall-ai/turbo-whisper.git
+cd turbo-whisper
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+</details>
+
+<details>
+<summary>Arch Linux (manual)</summary>
+
+```bash
+sudo pacman -S python-pyaudio portaudio xdotool xclip
+git clone https://github.com/knowall-ai/turbo-whisper.git
+cd turbo-whisper
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+</details>
+
+### macOS
+
+```bash
+# Install Homebrew dependencies
+brew install portaudio
+
+# Clone and install
+git clone https://github.com/knowall-ai/turbo-whisper.git
+cd turbo-whisper
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
 
 ### Windows
 
 ```powershell
 # Clone the repository
-git clone https://github.com/RationalCore/turbo-whisper-windows-edition.git
-cd turbo-whisper-windows-edition
+git clone https://github.com/knowall-ai/turbo-whisper.git
+cd turbo-whisper
 
 # Create virtual environment
 python -m venv .venv
@@ -46,11 +187,14 @@ pip install -e .
 pip install pyperclip  # Required for Windows clipboard/typing
 ```
 
-> **Quick start:** Double-click `run_turbo_whisper.bat` in the project root to launch Turbo Whisper directly from Explorer.
+> **Quick start on Windows:** Double-click `run_turbo_whisper.bat` in the project root to launch Turbo Whisper directly from Explorer (after cloning and installing).
+
+> **Full config reference:** See [`config.example.json`](config.example.json) in the project root for all available settings with defaults.
 
 ## Configuration
 
-Create `%APPDATA%\turbo-whisper\config.json` (Windows). For a full list of all available settings with their defaults, see [`config.example.json`](config.example.json).
+Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-whisper\config.json` (Windows).  
+For a full list of all available settings with their defaults, see [`config.example.json`](config.example.json) in the project root.
 
 **Single key — tilde (one-press recording):**
 ```json
@@ -84,10 +228,241 @@ Create `%APPDATA%\turbo-whisper\config.json` (Windows). For a full list of all a
 }
 ```
 
+### API Endpoints
+
+**OpenAI API:**
+```json
+{
+  "api_url": "https://api.openai.com/v1/audio/transcriptions",
+  "api_key": "sk-your-api-key"
+}
+```
+
+**Self-hosted faster-whisper-server:**
+```json
+{
+  "api_url": "http://your-server:8000/v1/audio/transcriptions",
+  "api_key": ""
+}
+```
+
+### LLM Aggregators & Alternative Providers
+
+Turbo Whisper supports any OpenAI-compatible API, including LLM aggregators that provide access to multiple Whisper models through a single endpoint. This is useful for users who want access to premium models (e.g. `whisper-large-v3-turbo`) without self-hosting.
+
+**RouterAI.ru — example with an LLM aggregator:**
+```json
+{
+  "api_url": "https://routerai.ru/api/v1/audio/transcriptions",
+  "api_key": "your-routerai-key",
+  "model": "openai/whisper-large-v3-turbo",
+  "use_json_api": true
+}
+```
+`use_json_api: true` enables JSON+base64 payload format used by RouterAI. Set to `false` for standard multipart/form-data (OpenAI-compatible endpoints).
+
+You can use any other OpenAI-compatible provider by changing `api_url`, `model`, and `api_key` accordingly.
+
+## Usage
+
+```bash
+# Activate virtual environment
+source .venv/bin/activate  # Linux/macOS
+# or
+.venv\Scripts\activate     # Windows
+
+# Start the application
+turbo-whisper
+```
+
+1. Press **Ctrl+Shift+Space** to start recording
+2. Speak your text
+3. Press **Ctrl+Shift+Space** again to stop and transcribe
+4. Text is automatically typed into the focused window (wherever your cursor is)
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Shift+Space | Start/stop recording (configurable) |
+| Esc | Cancel recording (when window is focused) |
+
+### Hotkey Options
+
+The hotkey can be either:
+- A **single key** (e.g. `~` / tilde) for one-press recording
+- A **modifier combination** (e.g. `["ctrl", "shift", "space"]`) to avoid conflicts
+
+**Single key example — tilde (recommended):**
+```json
+{
+  "hotkey": ["~"]
+}
+```
+
+**Modifier combination example:**
+```json
+{
+  "hotkey": ["ctrl", "shift", "space"]
+}
+```
+
+**Custom modifier combination:**
+```json
+{
+  "hotkey": ["ctrl", "alt", "w"]
+}
+```
+
+Available modifiers: `ctrl`, `shift`, `alt`, `super`
+
+### Autostart on Login
+
+To start Turbo Whisper automatically when you log in:
+
+**Linux (all distros):**
+```bash
+# Create autostart directory if it doesn't exist
+mkdir -p ~/.config/autostart
+
+# Copy the desktop file (if installed via AUR/PPA)
+cp /usr/share/applications/turbo-whisper.desktop ~/.config/autostart/
+
+# Or create manually
+cat > ~/.config/autostart/turbo-whisper.desktop << 'EOF'
+[Desktop Entry]
+Name=Turbo Whisper
+Exec=turbo-whisper
+Type=Application
+X-GNOME-Autostart-enabled=true
+EOF
+```
+
+**macOS:**
+- Open System Preferences → Users & Groups → Login Items
+- Click + and add Turbo Whisper
+
+**Windows:**
+- Press Win+R, type `shell:startup`, press Enter
+- Create a shortcut to `turbo-whisper` in that folder
+
+## Self-Hosting Whisper
+
+You can run your own Whisper server for faster, private, and cost-free transcription using [faster-whisper-server](https://github.com/fedirz/faster-whisper-server).
+
+### Hardware Requirements
+
+| Model | VRAM (GPU) | RAM (CPU) | Speed | Accuracy |
+|-------|------------|-----------|-------|----------|
+| tiny | ~1 GB | ~2 GB | Fastest | Basic |
+| base | ~1 GB | ~2 GB | Very fast | Good |
+| small | ~2 GB | ~4 GB | Fast | Better |
+| medium | ~5 GB | ~8 GB | Moderate | Great |
+| large-v3 | ~10 GB | ~16 GB | Slower | Best |
+
+**Recommendations:**
+- **GPU with 6+ GB VRAM**: Use `large-v3` for best accuracy
+- **GPU with 4 GB VRAM**: Use `small` or `medium`
+- **CPU only**: Use `tiny` or `base` (expect slower transcription)
+
+### Quick Start with Docker
+
+```bash
+# With NVIDIA GPU (recommended)
+docker run --gpus=all -p 8000:8000 \
+  -e WHISPER__MODEL=Systran/faster-whisper-large-v3 \
+  fedirz/faster-whisper-server:latest-cuda
+
+# With smaller model (less VRAM)
+docker run --gpus=all -p 8000:8000 \
+  -e WHISPER__MODEL=Systran/faster-whisper-small \
+  fedirz/faster-whisper-server:latest-cuda
+
+# CPU only (slower, no GPU required)
+docker run -p 8000:8000 \
+  -e WHISPER__MODEL=Systran/faster-whisper-base \
+  fedirz/faster-whisper-server:latest-cpu
+```
+
+### Available Models
+
+Models are downloaded automatically on first use:
+
+| Model ID | Size |
+|----------|------|
+| `Systran/faster-whisper-tiny` | ~75 MB |
+| `Systran/faster-whisper-base` | ~150 MB |
+| `Systran/faster-whisper-small` | ~500 MB |
+| `Systran/faster-whisper-medium` | ~1.5 GB |
+| `Systran/faster-whisper-large-v3` | ~3 GB |
+
+### Persistent Model Cache
+
+To avoid re-downloading models on container restart:
+
+```bash
+docker run --gpus=all -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e WHISPER__MODEL=Systran/faster-whisper-large-v3 \
+  fedirz/faster-whisper-server:latest-cuda
+```
+
+### Configure Turbo Whisper
+
+Update your config to use the self-hosted server:
+
+```json
+{
+  "api_url": "http://localhost:8000/v1/audio/transcriptions",
+  "api_key": ""
+}
+```
+
+### Verify Server is Running
+
+```bash
+curl http://localhost:8000/health
+```
+
+## Documentation
+
+For detailed documentation, see the [`docs/`](docs/) directory:
+
+- **[Installation Guide](docs/INSTALLATION.adoc)** - Complete installation instructions for all platforms
+- **[Solution Design](docs/SOLUTION_DESIGN.adoc)** - Technical architecture and cross-platform compatibility
+- **[Troubleshooting](docs/TROUBLESHOOTING.adoc)** - Common issues and solutions
+
+## Troubleshooting
+
+### Linux: Hotkey conflicts
+If Ctrl+Shift+Space conflicts with another application, edit the config:
+```json
+{
+  "hotkey": ["ctrl", "alt", "w"]
+}
+```
+
+### Windows: PyAudio installation fails
+Install the pre-built wheel:
+```powershell
+pip install pipwin
+pipwin install pyaudio
+```
+
+### macOS: Accessibility permissions
+Grant accessibility permissions to your terminal app in System Preferences → Security & Privacy → Privacy → Accessibility.
+
+For more troubleshooting tips, see [docs/TROUBLESHOOTING.adoc](docs/TROUBLESHOOTING.adoc).
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
+## Keywords
+
+Voice dictation Linux, speech to text, STT, voice typing, transcription, transcribe audio, OpenAI Whisper GUI, dictation software, speech recognition, voice input, hands-free typing, accessibility, SuperWhisper alternative, faster-whisper, voice to text CLI, terminal dictation, free open source, multilingual, 99 languages, RSI, carpal tunnel, real-time transcription, local whisper, offline speech recognition, nerd-dictation alternative, voice coding, voice input terminal, how to dictate on Linux, best voice dictation Linux, Ubuntu voice typing, Arch Linux dictation.
+
 ## Credits
 
-Inspired by [SuperWhisper](https://superwhisper.com/). This is a Windows-adapted fork focused on reliable, error-free operation on Windows using native WinAPI.
+Inspired by [SuperWhisper](https://superwhisper.com/) for macOS.  
+Based on the original [Turbo Whisper](https://github.com/knowall-ai/turbo-whisper) by [knowall-ai](https://github.com/knowall-ai).
