@@ -9,10 +9,10 @@
 |Platform |Typing |Hotkey |Audio |Window Focus
 
 |**Windows**
-|✅ PyAutoGUI
-|✅ pynput
+|✅ WinAPI + PyAutoGUI
+|✅ WinAPI RegisterHotKey
 |✅ PyAudio
-|✅ Qt flags
+|✅ Qt flags + AttachThreadInput
 
 |**macOS**
 |✅ PyAutoGUI*
@@ -148,9 +148,17 @@ Without this package, PyAudio will access raw ALSA devices which bypass PipeWire
 
 === Current Implementation
 
-Turbo Whisper uses **PyAutoGUI** for Windows/macOS and **evdev** for Linux:
+Turbo Whisper uses a multi-layered approach for Windows and **PyAutoGUI** for macOS, **evdev** for Linux:
 
-* **Windows/macOS**: PyAutoGUI - pure Python, simple API, works everywhere
+* **Windows**: Five fallback methods for Ctrl+V paste:
+  1. `keybd_event` (WinAPI) — bypasses UIPI, works on elevated apps
+  2. `PostMessage` WM_PASTE — sends paste message directly to child Edit/Scintilla controls
+  3. `SendInput` — standard input simulation
+  4. `pynput` keyboard controller
+  5. `pyautogui` hotkey
+
+  Clipboard copy uses `pyperclip` with fallback to built-in `clip.exe` (UTF-16LE encoding via `chardet`).
+* **macOS**: PyAutoGUI - pure Python, simple API, works everywhere
 * **Linux**: evdev (python-evdev) - creates a virtual keyboard via `/dev/uinput`, works on both X11 and Wayland
 * **Fallback**: PyAutoGUI on X11, then clipboard if all else fails
 
@@ -205,7 +213,11 @@ sudo udevadm trigger
 
 === Current Implementation
 
-Turbo Whisper uses **pynput** for global hotkeys. On Wayland, pynput works through XWayland compatibility layer, which is more reliable than the experimental xdg-desktop-portal GlobalShortcuts API.
+Turbo Whisper uses platform-specific hotkey implementations:
+
+* **Windows**: WinAPI `RegisterHotKey` via `WinApiHotkeyManager` — registers system-wide hotkeys without blocking other keyboard input. Falls back to pynput with `suppress=False` if WinAPI is unavailable.
+* **Linux/macOS**: pynput for global hotkeys. On Wayland, pynput works through XWayland compatibility layer, which is more reliable than the experimental xdg-desktop-portal GlobalShortcuts API.
+* **Linux Wayland (Portal)**: `PortalHotkeyManager` using `xdg-desktop-portal` GlobalShortcuts when available.
 
 == Window Focus Management
 
@@ -250,11 +262,51 @@ evdev requires access to `/dev/uinput` (see Auto-Typing section above).
 
 === Windows
 
-PyAutoGUI works without special permissions, but some elevated applications may block simulated keyboard input.
+PyAutoGUI works without special permissions, but some elevated applications may block simulated keyboard input. Turbo Whisper mitigates this with multiple fallback methods:
+
+* `keybd_event` — uses legacy WinAPI that bypasses User Interface Privilege Isolation (UIPI)
+* `PostMessage` WM_PASTE — sends paste message directly to the target window's message queue
+* `AttachThreadInput` — attaches to the target window's input thread before posting paste
+
+Additionally, the tray icon includes a periodic refresh mechanism (`_tray_refresh_timer`) to prevent Windows from automatically hiding it.
+
+== API Providers
+
+Turbo Whisper works with any OpenAI-compatible API endpoint. This includes:
+
+* **OpenAI Whisper API** — `https://api.openai.com/v1/audio/transcriptions`
+* **Self-hosted faster-whisper-server** — local or remote instance
+* **LLM aggregators** — services that provide access to multiple Whisper models through a single API
+
+=== LLM Aggregators
+
+LLM aggregators allow access to premium Whisper models (e.g. `whisper-large-v3-turbo`, `whisper-large-v3`) without self-hosting. Turbo Whisper supports any OpenAI-compatible aggregator.
+
+Example with RouterAI.ru:
+
+[source,json]
+----
+{
+  "api_url": "https://routerai.ru/api/v1/audio/transcriptions",
+  "api_key": "your-routerai-key",
+  "model": "openai/whisper-large-v3-turbo",
+  "use_json_api": true
+}
+----
+
+The `use_json_api` flag controls the request format:
+* `true` — sends audio as base64-encoded JSON payload (used by RouterAI)
+* `false` — sends standard multipart/form-data (OpenAI-compatible)
 
 == Single Instance
 
-The application uses file locking (`fcntl.flock`) to ensure only one instance runs at a time. The lock file is stored at:
+The application uses file locking to ensure only one instance runs at a time:
+
+* **Linux/macOS**: `fcntl.flock` on the lock file
+* **Windows**: `msvcrt.locking()` with `msvcrt.LK_NBLCK` — equivalent to flock with LOCK_EX | LOCK_NB
+
+The lock file is stored at:
 
 * Linux: `$XDG_RUNTIME_DIR/turbo-whisper.lock`
+* Windows: `%TEMP%\turbo-whisper.lock`
 * Fallback: `/tmp/turbo-whisper.lock`

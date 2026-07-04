@@ -15,9 +15,12 @@ src/turbo_whisper/
 ├── icons.py      # Lucide SVG icons (power, copy, eye, chevron)
 ├── recorder.py   # Audio recording with PyAudio
 ├── api.py        # Whisper API client (OpenAI-compatible)
-├── hotkey.py     # Global hotkey handling with pynput
-├── typer.py      # Auto-type using xdotool/wtype
-└── config.py     # Configuration management with history
+├── hotkey.py     # Global hotkey handling (WinAPI WinApiHotkeyManager on Windows, pynput on Linux/macOS)
+├── typer.py      # Auto-type using WinAPI/PyAutoGUI (Windows), evdev (Linux), PyAutoGUI (macOS)
+├── config.py     # Configuration management with history
+├── winapi.py     # Windows-specific WinAPI helpers (RegisterHotKey, keybd_event, etc.)
+├── clipboard.py  # Clipboard operations with multi-fallback (pyperclip -> clip.exe)
+└── tray.py       # System tray with periodic refresh for Windows compatibility
 ```
 
 ## Icon Library
@@ -41,8 +44,11 @@ To add a new icon:
 ## Development Commands
 
 ```bash
-# Activate virtual environment
+# Activate virtual environment (Linux/macOS)
 source .venv/bin/activate
+
+# Activate virtual environment (Windows)
+.venv\Scripts\activate
 
 # Run the application
 turbo-whisper
@@ -79,7 +85,7 @@ ruff check src/
 
 ## Configuration
 
-Config file: `~/.config/turbo-whisper/config.json`
+Config file: `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-whisper\config.json` (Windows)
 
 Key settings:
 - `api_url`: Whisper API endpoint
@@ -92,9 +98,13 @@ Key settings:
 
 - **PyQt6**: UI framework
 - **PyAudio**: Audio recording
-- **pynput**: Global hotkey handling
+- **pynput**: Global hotkey handling (fallback on Windows if WinAPI unavailable)
 - **httpx**: HTTP client for API calls
-- **xdotool**: Auto-typing (system dependency)
+- **pyperclip**: Clipboard access
+- **chardet**: Encoding detection (Windows clipboard)
+- **xdotool**: Auto-typing on Linux X11 (system dependency)
+- **python-evdev**: Auto-typing on Linux Wayland
+- **Windows**: Uses built-in WinAPI via ctypes (no extra system dependencies)
 
 ## Testing
 
@@ -114,13 +124,19 @@ The app spawns multiple processes that must ALL be killed:
 - uv wrapper: `uv run turbo-whisper`
 - Parent shell wrappers (when run from Claude)
 
-**Reliable kill command:**
+**Reliable kill command (Linux/macOS):**
 ```bash
 # Kill ALL turbo-whisper processes (catches all variations)
 pkill -9 -f "turbo.whisper"
 
 # Verify they're gone
 pgrep -af "turbo.whisper" || echo "All killed"
+```
+
+**Reliable kill command (Windows):**
+```powershell
+# Kill ALL turbo-whisper processes
+powershell -Command "Get-Process | Where-Object { $_.ProcessName -like '*turbo*whisper*' -or $_.CommandLine -like '*turbo*whisper*' } | Stop-Process -Force 2>&1; Remove-Item -Path "$env:TEMP\turbo-whisper.lock" -ErrorAction SilentlyContinue"
 ```
 
 **Why this pattern works:**

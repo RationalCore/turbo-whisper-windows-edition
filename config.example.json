@@ -1,19 +1,36 @@
 {
-  "api_url": "https://api.openai.com/v1/audio/transcriptions",
-  "api_key": "sk-your-api-key-here",
-  "hotkey": ["alt", "space"],
+  "api_url": "https://routerai.ru/api/v1/audio/transcriptions",
+  "api_key": "YOUR_KEY",
+  "model": "openai/whisper-large-v3-turbo",
+  "use_json_api": true,
+
+  "hotkey": ["~"],
+
   "sample_rate": 16000,
   "channels": 1,
   "chunk_size": 1024,
   "input_device_index": null,
   "input_device_name": "",
+  "min_audio_bytes": 1000,
+
   "waveform_color": "#84cc16",
   "background_color": "#1a1a2e",
   "window_width": 520,
   "window_height": 260,
+
   "auto_paste": true,
   "copy_to_clipboard": true,
-  "language": "en",
+  "language": "ru",
+  "use_character_typing": false,
+  "typing_delay_ms": 5,
+
+  "notification_cooldown": 2.5,
+
+  "claude_integration": false,
+  "claude_integration_port": 7878,
+  "claude_wait_timeout": 30.0,
+
   "history": [],
-  "history_max": 20
+  "history_max": 20,
+  "store_recordings": true
 }

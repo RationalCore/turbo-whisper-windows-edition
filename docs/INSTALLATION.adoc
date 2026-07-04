@@ -59,7 +59,25 @@ brew install portaudio
 
 === Windows
 
-No additional system dependencies required. PyAudio wheels are available on PyPI.
+No additional system dependencies required. PyAudio and pyperclip wheels are available on PyPI.
+
+Turbo Whisper is fully adapted for Windows with the following native integrations:
+
+* **Global hotkeys via WinAPI** — Uses `RegisterHotKey` instead of pynput for reliable, non-blocking hotkey registration
+* **Multi-method clipboard paste** — Five fallback methods for Ctrl+V paste:
+  ** `keybd_event` (legacy WinAPI, bypasses UIPI)
+  ** `PostMessage` WM_PASTE to Edit/Scintilla child controls
+  ** `SendInput` (standard input simulation)
+  ** `pynput` keyboard controller
+  ** `pyautogui` hotkey
+* **Clipboard copy** — `pyperclip` with fallback to built-in `clip.exe` (UTF-16LE encoding)
+* **Single-instance locking** — Uses `msvcrt.locking()` instead of `fcntl.flock`
+* **Tray icon refresh** — Prevents Windows from hiding the tray icon
+* **Config path** — `%APPDATA%\turbo-whisper\config.json`
+* **Default hotkey** — `F8` key (reliable single-key hotkey on Windows)
+* **Startup launcher** — `run_turbo_whisper.bat` included for quick launch from Explorer
+
+No WSL, Cygwin, or Linux emulation required — all Windows-specific code uses native WinAPI via ctypes.
 
 == Installation Methods
 
@@ -229,6 +247,24 @@ docker run -d --gpus all -p 8000:8000 fedirz/faster-whisper-server
 ----
 
 The default API URL (`http://localhost:8000/v1/audio/transcriptions`) works with faster-whisper-server out of the box.
+
+=== Using with LLM Aggregators & Alternative Providers
+
+Turbo Whisper supports any OpenAI-compatible API, including LLM aggregators that provide access to multiple Whisper models through a single endpoint. This is useful for access to premium models (e.g. `whisper-large-v3-turbo`) without self-hosting.
+
+Example with RouterAI.ru — an LLM aggregator:
+[source,json]
+----
+{
+  "api_url": "https://routerai.ru/api/v1/audio/transcriptions",
+  "api_key": "your-routerai-key",
+  "model": "openai/whisper-large-v3-turbo",
+  "use_json_api": true
+}
+----
+`use_json_api: true` enables JSON+base64 payload format used by RouterAI. Set to `false` for standard multipart/form-data (OpenAI-compatible endpoints).
+
+You can use any other OpenAI-compatible provider by changing `api_url`, `model`, and `api_key` accordingly.
 
 == Verifying Installation
 

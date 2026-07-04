@@ -28,8 +28,11 @@
 |**xdotool types into wrong window**
 |xdotool only works for XWayland apps, not native Wayland apps like VS Code or Ghostty. Ensure evdev is working (see above) for native Wayland support.
 
-|**Multiple app instances running**
+|**Multiple app instances running (Linux/macOS)**
 |Kill all instances: `pkill -9 -f turbo_whisper`. Remove lock file: `rm -f $XDG_RUNTIME_DIR/turbo-whisper.lock`. Restart app.
+
+|**Multiple app instances running (Windows)**
+|Kill all instances via Task Manager. Remove lock file: `del %TEMP%\turbo-whisper.lock`. On Windows, Turbo Whisper uses `msvcrt.locking()` for single-instance enforcement (equivalent to `fcntl.flock` on Linux).
 
 |**Hotkey not working on Wayland**
 |pynput works via XWayland on Wayland. Ensure XWayland is running. Check if hotkey conflicts with system shortcuts in KDE Settings > Shortcuts.
@@ -56,7 +59,7 @@
 |pynput requires Input Monitoring permissions on macOS. Go to System Preferences → Security & Privacy → Privacy → Input Monitoring and add your terminal or the app.
 
 |**Windows: Auto-type not working**
-|Ensure PyAutoGUI is installed. Some apps with elevated privileges may block simulated keyboard input. Try running Turbo Whisper as administrator.
+|Turbo Whisper uses five fallback methods for Ctrl+V paste. If one fails, it tries the next: `keybd_event` (WinAPI, bypasses UIPI) → `PostMessage` WM_PASTE → `SendInput` → `pynput` → `pyautogui`. Check logs in `%APPDATA%\turbo-whisper\logs\` to see which method was used. For elevated/admin apps, run Turbo Whisper as administrator so `keybd_event` can bypass UIPI.
 
 |**PPA: "Repository does not have a Release file"**
 |The PPA may not have packages for your Ubuntu version. Check which series are supported at https://launchpad.net/~bengweeks/+archive/ubuntu/turbo-whisper. Request support for your version or install from source.
@@ -80,7 +83,13 @@
 |Some Linux window managers don't fully respect Qt's `WindowDoesNotAcceptFocus` flag. The recording window may briefly take focus when appearing. The transcribed text should still be inserted into the correct window when recording stops, as focus is tracked internally.
 
 |**Windows: Default hotkey conflicts**
-|On Windows, the default hotkey is F8 (not Alt+Space). Alt+Space opens the window menu, Ctrl+Shift+Space conflicts with various apps, and Win+Shift+V conflicts with clipboard history. Change the hotkey in settings if F8 conflicts with other apps.
+|On Windows, the default hotkey is F8 (not Alt+Space). Alt+Space opens the window menu, Ctrl+Shift+Space conflicts with various apps, and Win+Shift+V conflicts with clipboard history. Change the hotkey in settings if F8 conflicts with other apps. The WinAPI `WinApiHotkeyManager` uses `RegisterHotKey` which registers system-wide hotkeys without blocking other keyboard input.
+
+|**Windows: Tray icon disappears**
+|Windows may auto-hide tray icons. Turbo Whisper includes a periodic tray refresh mechanism (`_tray_refresh_timer`) that prevents this by re-showing the icon at intervals. If the icon still disappears, check Windows taskbar settings: right-click taskbar → Taskbar settings → "Select which icons appear on the taskbar" and enable Turbo Whisper.
+
+|**Windows: Clipboard copy fails**
+|Turbo Whisper uses `pyperclip` for clipboard copy with fallback to built-in `clip.exe` (UTF-16LE encoding via `chardet`). If both fail, check if another application is holding the clipboard open. Restarting the app usually resolves this.
 
 |**"Show Window" from tray doesn't bring window to front**
 |On some Linux window managers, the window may not come to the foreground. Click "Settings" instead (which activates the window), or use the hotkey. You can also click directly on the window in your taskbar.

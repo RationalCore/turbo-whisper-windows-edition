@@ -12,9 +12,6 @@ def _default_hotkey() -> list[str]:
     """Return platform-appropriate default hotkey."""
     import sys
     if sys.platform == "win32":
-        # Alt+Space conflicts with Windows window menu
-        # Ctrl+Shift+Space conflicts with various apps
-        # Win+Shift+V conflicts with clipboard history
         return ["f8"]
     else:
         return ["alt", "space"]
@@ -33,12 +30,12 @@ class Config:
     """Application configuration."""
 
     # API settings
-    api_url: str = "https://whisper.weeksfamily.me/v1/audio/transcriptions"
+    api_url: str = "https://routerai.ru/api/v1/audio/transcriptions"
     api_key: str = ""
+    model: str = "openai/whisper-large-v3-turbo"
+    use_json_api: bool = True  # True = JSON+base64 (routerai), False = multipart (OpenAI)
 
     # Hotkey settings (using pynput key names)
-    # Default: F8 on Windows (Alt+Space conflicts with window menu)
-    #          Alt+Space on Linux/macOS
     hotkey: list[str] = field(default_factory=_default_hotkey)
 
     # Audio settings
@@ -47,23 +44,28 @@ class Config:
     chunk_size: int = 1024
     input_device_index: int | str | None = None  # None = system default, str for PipeWire source ID
     input_device_name: str = ""  # For display purposes
+    min_audio_bytes: int = 1000  # Minimum audio size before sending
 
     # UI settings
     waveform_color: str = "#84cc16"  # KnowAll.ai lime green
     background_color: str = "#1a1a2e"
     window_width: int = 520
-    window_height: int = 260  # Taller window for bigger waveform
+    window_height: int = 260
 
     # Behavior
     auto_paste: bool = True
     copy_to_clipboard: bool = True
-    language: str = "en"
-    typing_delay_ms: int = 5  # Milliseconds between keystrokes (increase if terminal freezes)
+    language: str = "ru"
+    use_character_typing: bool = False  # False = clipboard paste (Ctrl+V), True = char-by-char
+    typing_delay_ms: int = 5  # Milliseconds between keystrokes (only used if use_character_typing=True)
 
-    # Claude Code integration
-    claude_integration: bool = True  # Enable integration server for Claude Code
-    claude_integration_port: int = 7878  # Port for integration HTTP server
-    claude_wait_timeout: float = 30.0  # Max seconds to wait for Claude ready signal
+    # Notifications
+    notification_cooldown: float = 2.5  # Seconds between notifications
+
+    # Claude Code integration (disabled by default — enable in settings if you use Claude Code)
+    claude_integration: bool = False
+    claude_integration_port: int = 7878
+    claude_wait_timeout: float = 30.0
 
     # History (recent transcriptions)
     history: list[HistoryEntry] = field(default_factory=list)
@@ -135,10 +137,8 @@ class Config:
         """Get the configuration file path."""
         import sys
         if sys.platform == "win32":
-            # Windows: use APPDATA
             config_dir = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         else:
-            # Linux/macOS: use XDG_CONFIG_HOME
             config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         return config_dir / "turbo-whisper" / "config.json"
 
@@ -156,10 +156,8 @@ class Config:
                     migrated = []
                     for entry in data["history"]:
                         if isinstance(entry, str):
-                            # Old format: just a string
                             migrated.append({"text": entry, "timestamp": ""})
                         else:
-                            # New format: dict with text and timestamp
                             migrated.append(entry)
                     data["history"] = migrated
                 return cls(**data)

@@ -8,6 +8,8 @@
 
 Turbo Whisper is a **free, open source** voice dictation and transcription app for Linux, macOS, and Windows. A SuperWhisper alternative with a beautiful GUI for real-time speech to text (STT). Supports **99 languages** via OpenAI Whisper. Perfect for accessibility, RSI, and hands-free typing.
 
+> **Windows:** Turbo Whisper is fully adapted for reliable, error-free operation on Windows. Uses native WinAPI for hotkeys (RegisterHotKey), multi-method clipboard paste (keybd_event, WM_PASTE, SendInput, pynput, pyautogui), and `msvcrt` process locking — no WSL or Cygwin required.
+
 **Voice dictation** | **Speech to text (STT)** | **Voice typing** | **Transcription** | **Open source** | **Multilingual** | **Hands-free**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -185,15 +187,20 @@ pip install -e .
 pip install pyperclip  # Required for Windows clipboard/typing
 ```
 
+> **Quick start on Windows:** Double-click `run_turbo_whisper.bat` in the project root to launch Turbo Whisper directly from Explorer (after cloning and installing).
+
+> **Full config reference:** See [`config.example.json`](config.example.json) in the project root for all available settings with defaults.
+
 ## Configuration
 
-Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-whisper\config.json` (Windows):
+Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-whisper\config.json` (Windows).  
+For a full list of all available settings with their defaults, see [`config.example.json`](config.example.json) in the project root.
 
 ```json
 {
   "api_url": "https://api.openai.com/v1/audio/transcriptions",
   "api_key": "sk-your-api-key",
-  "hotkey": ["ctrl", "shift", "space"],
+  "hotkey": ["~"],
   "language": "en",
   "auto_paste": true,
   "copy_to_clipboard": true,
@@ -202,6 +209,8 @@ Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-w
   "background_color": "#1a1a2e"
 }
 ```
+
+> **Hotkey `~` (tilde) note:** The hotkey is bound to the physical key code, not to the layout character. On a Russian layout it's `ё`, on English — `` ` `` (backtick) with Shift — `~`, etc. Regardless of the active keyboard layout, the key will be handled correctly.
 
 ### API Endpoints
 
@@ -220,6 +229,23 @@ Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-w
   "api_key": ""
 }
 ```
+
+### LLM Aggregators & Alternative Providers
+
+Turbo Whisper supports any OpenAI-compatible API, including LLM aggregators that provide access to multiple Whisper models through a single endpoint. This is useful for users who want access to premium models (e.g. `whisper-large-v3-turbo`) without self-hosting.
+
+**RouterAI.ru — example with an LLM aggregator:**
+```json
+{
+  "api_url": "https://routerai.ru/api/v1/audio/transcriptions",
+  "api_key": "your-routerai-key",
+  "model": "openai/whisper-large-v3-turbo",
+  "use_json_api": true
+}
+```
+`use_json_api: true` enables JSON+base64 payload format used by RouterAI. Set to `false` for standard multipart/form-data (OpenAI-compatible endpoints).
+
+You can use any other OpenAI-compatible provider by changing `api_url`, `model`, and `api_key` accordingly.
 
 ## Usage
 
@@ -245,9 +271,27 @@ turbo-whisper
 | Ctrl+Shift+Space | Start/stop recording (configurable) |
 | Esc | Cancel recording (when window is focused) |
 
-### Custom Hotkey
+### Hotkey Options
 
-Edit your config to change the hotkey:
+The hotkey can be either:
+- A **single key** (e.g. `~` / tilde) for one-press recording
+- A **modifier combination** (e.g. `["ctrl", "shift", "space"]`) to avoid conflicts
+
+**Single key example — tilde (recommended):**
+```json
+{
+  "hotkey": ["~"]
+}
+```
+
+**Modifier combination example:**
+```json
+{
+  "hotkey": ["ctrl", "shift", "space"]
+}
+```
+
+**Custom modifier combination:**
 ```json
 {
   "hotkey": ["ctrl", "alt", "w"]
