@@ -38,15 +38,17 @@ class Typer:
     Falls back to character-by-character typing if use_character_typing=True.
     """
 
-    def __init__(self, typing_delay_ms: int = 5, use_character_typing: bool = False):
+    def __init__(self, typing_delay_ms: int = 5, use_character_typing: bool = False, copy_to_clipboard: bool = True):
         self.system = SYSTEM
         self._uinput = None
         self._evdev_available = False
         self._typing_delay = typing_delay_ms / 1000.0  # Convert to seconds
         self._use_character_typing = use_character_typing
+        self._copy_to_clipboard = copy_to_clipboard  # Whether to keep text in clipboard after paste
         # Store target hwnd captured before recording starts
         self._target_hwnd = 0
         self._target_title = ""
+        self._is_console = False  # True if target is CMD/PowerShell
         # Saved child edit/Scintilla control handle for direct WM_PASTE
         self._target_edit_hwnd = 0
 
@@ -218,13 +220,22 @@ class Typer:
         This method supports full Unicode (Russian, emoji, etc.) and is much faster
         than character-by-character typing.
 
+        If copy_to_clipboard is False, the original clipboard content will be restored
+        after pasting.
+
         Args:
             text: Text to paste
 
         Returns:
             True if successful, False otherwise
         """
-        # First copy to clipboard
+        # Save original clipboard content if we need to restore it later
+        saved_clipboard = ""
+        if not self._copy_to_clipboard:
+            saved_clipboard = self.get_clipboard_text()
+            logger.info(f"_type_clipboard_paste: saved clipboard content ({len(saved_clipboard)} chars) for later restoration")
+
+        # Copy text to clipboard
         logger.info(f"_type_clipboard_paste: copying '{text[:50]}...' to clipboard")
         clipboard_ok = self.copy_to_clipboard(text)
         logger.info(f"_type_clipboard_paste: copy_to_clipboard returned {clipboard_ok}")
@@ -240,28 +251,42 @@ class Typer:
         logger.info("_type_clipboard_paste: sleeping 0.15s for clipboard/window focus")
         time.sleep(0.15)
 
+        # Perform paste operation
+        result = False
         if self.system == "Windows":
-            result = self._simulate_paste_windows()
+            # Check if target is a console window
+            if hasattr(self, '_is_console') and self._is_console:
+                logger.info("_type_clipboard_paste: console window detected, using WM_CHAR method")
+                result = self._paste_to_console(text)
+            else:
+                result = self._simulate_paste_windows()
             logger.info(f"_type_clipboard_paste: Windows paste -> {result}")
-            return result
         elif self.system == "Darwin":
             result = self._simulate_paste_macos()
             logger.info(f"_type_clipboard_paste: macOS paste -> {result}")
-            return result
         else:
             result = self._simulate_paste_linux()
             logger.info(f"_type_clipboard_paste: Linux paste -> {result}")
-            return result
+
+        # Restore original clipboard if copy_to_clipboard is False
+        if not self._copy_to_clipboard and result:
+            # Wait a bit to ensure paste operation completed
+            time.sleep(0.2)
+            restore_ok = self.copy_to_clipboard(saved_clipboard)
+            logger.info(f"_type_clipboard_paste: restored original clipboard content -> {restore_ok}")
+
+        return result
 
     def set_target_window(self, hwnd: int) -> None:
         """Set the target window handle for paste operations.
-        
+
         This should be called BEFORE recording starts to capture the
         foreground window handle, so we can paste into it after recording.
         Also saves the first Edit/Scintilla child for direct WM_PASTE.
         """
         if hwnd:
             self._target_hwnd = hwnd
+            self._is_console = False
             try:
                 import ctypes
                 user32 = ctypes.windll.user32
@@ -270,6 +295,14 @@ class Typer:
                 user32.GetWindowTextW(hwnd, buf, length)
                 self._target_title = buf.value
                 logger.info(f"set_target_window: saved hwnd={hwnd}, title='{self._target_title[:60]}'")
+
+                # Detect console windows (CMD, PowerShell, Windows Terminal)
+                class_buf = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, class_buf, 256)
+                class_name = class_buf.value
+                if class_name in ('ConsoleWindowClass', 'PuTTY', 'mintty', 'Windows Terminal'):
+                    self._is_console = True
+                    logger.info(f"set_target_window: detected console window (class={class_name})")
             except Exception as e:
                 logger.info(f"set_target_window: saved hwnd={hwnd}")
 
@@ -517,6 +550,114 @@ class Typer:
         logger.error("_simulate_paste_windows: ALL METHODS FAILED")
         return False
 
+    def _paste_to_console(self, text: str) -> bool:
+        """Paste text to console window (CMD, PowerShell) with fallback methods.
+
+        Console windows don't support Ctrl+V paste reliably.
+        Tries multiple methods: PostMessage WM_CHAR, SendInput, keybd_event.
+        """
+        import ctypes
+        import ctypes.wintypes
+        import time
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        hwnd = self._target_hwnd if self._target_hwnd else user32.GetForegroundWindow()
+        if not hwnd:
+            logger.warning("_paste_to_console: no window handle")
+            return False
+
+        logger.info(f"_paste_to_console: sending {len(text)} chars to hwnd={hwnd}")
+
+        # Method 1: Try PostMessage WM_CHAR
+        success_count = 0
+        for char in text:
+            result = user32.PostMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
+            if result != 0:
+                success_count += 1
+            time.sleep(0.005)
+
+        if success_count > len(text) * 0.5:
+            logger.info(f"_paste_to_console: PostMessageW succeeded for {success_count}/{len(text)} chars")
+            return True
+
+        # Method 2: Try SendInput with keybd_event for each character
+        logger.info("_paste_to_console: PostMessageW failed, trying SendInput method")
+        try:
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+            KEYEVENTF_KEYUP = 0x0002
+
+            # Save clipboard
+            old_clipboard = ""
+            try:
+                import pyperclip
+                old_clipboard = pyperclip.paste()
+            except Exception:
+                pass
+
+            # Copy text to clipboard
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+            except Exception:
+                try:
+                    import subprocess as sp
+                    proc = sp.Popen(["clip.exe"], stdin=sp.PIPE, shell=True)
+                    encoded = text.encode("utf-16-le") + b"\0\0"
+                    proc.communicate(input=encoded)
+                except Exception:
+                    logger.error("_paste_to_console: clipboard copy failed")
+                    return False
+
+            time.sleep(0.1)
+
+            # Send Ctrl+V via keybd_event
+            old_fg = user32.GetForegroundWindow()
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.05)
+
+            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_V, 0, 0, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.1)
+
+            # Restore focus
+            if old_fg and old_fg != hwnd:
+                user32.SetForegroundWindow(old_fg)
+
+            # Restore clipboard
+            try:
+                import pyperclip
+                pyperclip.copy(old_clipboard)
+            except Exception:
+                pass
+
+            logger.info("_paste_to_console: SendInput method completed")
+            return True
+
+        except Exception as e:
+            logger.error(f"_paste_to_console: SendInput failed: {e}")
+
+        # Method 3: Try character typing as last resort
+        logger.info("_paste_to_console: trying character typing fallback")
+        try:
+            for char in text:
+                user32.PostMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
+                time.sleep(0.01)
+            logger.info("_paste_to_console: character typing completed")
+            return True
+        except Exception as e:
+            logger.error(f"_paste_to_console: character typing failed: {e}")
+
+        logger.error("_paste_to_console: ALL METHODS FAILED")
+        return False
+
     def _simulate_paste_macos(self) -> bool:
         """Simulate Cmd+V on macOS."""
         try:
@@ -653,6 +794,55 @@ class Typer:
                 time.sleep(self._typing_delay)
 
         return True
+
+    def get_clipboard_text(self) -> str:
+        """
+        Get text from clipboard.
+
+        Returns:
+            Current clipboard text, or empty string if clipboard is empty or on error
+        """
+        if self.system == "Windows":
+            try:
+                import pyperclip
+                text = pyperclip.paste()
+                logger.info(f"get_clipboard_text: pyperclip.paste() returned {len(text)} chars")
+                return text
+            except Exception as e:
+                logger.error(f"get_clipboard_text (pyperclip): {e}")
+                return ""
+
+        if self.system == "Darwin":
+            try:
+                proc = subprocess.Popen(
+                    ["pbpaste"],
+                    stdout=subprocess.PIPE,
+                )
+                output, _ = proc.communicate()
+                if proc.returncode == 0:
+                    return output.decode("utf-8")
+            except Exception:
+                pass
+            return ""
+
+        # Linux - try multiple clipboard tools
+        clipboard_commands = [
+            ["wl-paste"],  # Wayland
+            ["xclip", "-selection", "clipboard", "-o"],  # X11
+            ["xsel", "--clipboard", "--output"],  # X11 alternative
+        ]
+
+        for cmd in clipboard_commands:
+            if shutil.which(cmd[0]):
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    output, _ = proc.communicate()
+                    if proc.returncode == 0:
+                        return output.decode("utf-8")
+                except Exception:
+                    pass
+
+        return ""
 
     def copy_to_clipboard(self, text: str) -> bool:
         """

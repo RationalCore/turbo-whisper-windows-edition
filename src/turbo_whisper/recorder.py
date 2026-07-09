@@ -1,16 +1,49 @@
 """Audio recording functionality."""
 
 import io
+import logging
+import os
 import subprocess
 import sys
 import threading
 import wave
 from collections import deque
+from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pyaudio
 
-from .config import Config
+from turbo_whisper.config import Config
+
+
+def _setup_logger() -> logging.Logger:
+    """Set up file logger for recorder module."""
+    logger = logging.getLogger("turbo_whisper.recorder")
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+        if sys.platform == "win32":
+            log_dir = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        else:
+            log_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        log_dir = log_dir / "turbo-whisper"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "turbo-whisper.log"
+
+        handler = logging.FileHandler(str(log_path), encoding="utf-8")
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+    return logger
+
+
+logger = _setup_logger()
 
 
 def get_pipewire_sources() -> list[dict]:
@@ -65,6 +98,13 @@ class AudioRecorder:
         self.waveform_buffer = deque(maxlen=100)
         self._record_thread = None
 
+        # Streaming mode state
+        self._streaming_mode = False
+        self._on_chunk_ready: Callable[[bytes], None] | None = None
+        self._silence_detector = None
+        self._chunk_frames: list[bytes] = []
+        self._overlap_frames: deque[bytes] = deque(maxlen=10)
+
     def get_input_devices(self) -> list[dict]:
         """Get list of available input devices."""
         # Try PipeWire first (Linux)
@@ -100,14 +140,34 @@ class AudioRecorder:
                 pass
         return devices
 
-    def start(self, level_callback=None) -> None:
-        """Start recording audio."""
+    def start(
+        self,
+        level_callback=None,
+        streaming_mode: bool = False,
+        on_chunk_ready: Callable[[bytes], None] | None = None,
+        silence_detector=None,
+    ) -> None:
+        """Start recording audio.
+
+        Args:
+            level_callback: Called with (level, waveform_buffer) for UI updates
+            streaming_mode: If True, detect silence and call on_chunk_ready
+            on_chunk_ready: Called with WAV bytes when a speech chunk is detected
+            silence_detector: SilenceDetector instance for VAD
+        """
         if self.is_recording:
             return
 
         self.level_callback = level_callback
         self.frames = []
         self.is_recording = True
+
+        # Streaming mode state
+        self._streaming_mode = streaming_mode
+        self._on_chunk_ready = on_chunk_ready
+        self._silence_detector = silence_detector
+        self._chunk_frames = []
+        self._overlap_frames = deque(maxlen=10)
 
         # Use simple defaults - let PyAudio/PipeWire handle device routing
         self.stream = self.audio.open(
@@ -122,7 +182,7 @@ class AudioRecorder:
         self._record_thread.start()
 
     def _record_loop(self) -> None:
-        """Recording loop."""
+        """Recording loop - handles both batch and streaming modes."""
         frame_count = 0
         while self.is_recording and self.stream:
             try:
@@ -130,17 +190,81 @@ class AudioRecorder:
                 self.frames.append(data)
                 frame_count += 1
 
+                # Calculate energy level
                 audio_data = np.frombuffer(data, dtype=np.int16)
                 level = np.abs(audio_data).mean() / 32768.0
 
-                self.waveform_buffer.append(level)
+                if self._streaming_mode and self._silence_detector:
+                    # Streaming mode: accumulate frames and check for silence
+                    self._chunk_frames.append(data)
+                    self._overlap_frames.append(data)
 
+                    # Log every 100 frames to see energy levels
+                    if frame_count % 100 == 0:
+                        logger.info(f"Streaming frame={frame_count}: level={level:.6f}, "
+                                  f"threshold={self._silence_detector.energy_threshold}, "
+                                  f"chunk_frames={len(self._chunk_frames)}, "
+                                  f"speech_detected={self._silence_detector._speech_detected}")
+
+                    # Pass audio data and energy level to detector
+                    if self._silence_detector.update(data, level):
+                        # Silence after speech detected - send chunk for transcription
+                        chunk_audio = self._build_chunk_wav(self._chunk_frames)
+                        logger.info(f"SILENCE DETECTED! Chunk ready: {len(chunk_audio)} bytes, "
+                                  f"frames={len(self._chunk_frames)}")
+                        self._chunk_frames = []  # Clear chunk
+                        self._overlap_frames.clear()  # Clear overlap to avoid duplication
+
+                        if self._on_chunk_ready and len(chunk_audio) > 0:
+                            self._on_chunk_ready(chunk_audio)
+
+                # Always update waveform buffer
+                self.waveform_buffer.append(level)
                 if self.level_callback:
                     self.level_callback(level, list(self.waveform_buffer))
 
             except Exception as e:
                 print(f"Recording error: {e}")
                 break
+
+    def _build_chunk_wav(self, frames: list[bytes]) -> bytes:
+        """Convert frames to WAV bytes for chunk transcription."""
+        if not frames:
+            return b""
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wf:
+            wf.setnchannels(self.config.channels)
+            wf.setsampwidth(2)
+            wf.setframerate(self._actual_sample_rate)
+            wf.writeframes(b"".join(frames))
+        return wav_buffer.getvalue()
+
+    def flush_remaining_chunk(self) -> bytes | None:
+        """Flush remaining chunk frames as a final chunk for transcription.
+
+        Returns:
+            WAV bytes if there are remaining frames, None otherwise
+        """
+        if self._streaming_mode and self._chunk_frames:
+            # Only use remaining chunk frames, not overlap
+            chunk_audio = self._build_chunk_wav(self._chunk_frames)
+            self._chunk_frames = []
+            self._overlap_frames.clear()
+            if len(chunk_audio) > 0:
+                logger.info(f"Flushing remaining chunk: {len(chunk_audio)} bytes")
+                return chunk_audio
+        return None
+
+    def disable_streaming(self) -> None:
+        """Disable streaming mode without stopping the recorder.
+
+        The recorder continues running for visual feedback, but
+        no new chunks will be created.
+        """
+        self._streaming_mode = False
+        self._on_chunk_ready = None
+        self._silence_detector = None
+        logger.info("Streaming mode disabled (recorder still running)")
 
     def stop(self) -> bytes:
         """Stop recording and return WAV data."""

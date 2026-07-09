@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from .config import Config
+from turbo_whisper.config import Config
 
 
 # Setup logging to file
@@ -177,8 +177,12 @@ class WhisperClient:
                         logger.error("API endpoint not found")
                         raise WhisperAPIError("API endpoint not found - check your API URL")
                     elif response.status_code >= 500:
-                        err_msg = response.text[:300]
-                        logger.error(f"Server error (attempt {attempt}/{max_retries}): {err_msg}")
+                        err_msg = response.text
+                        logger.error(f"Server error (attempt {attempt}/{max_retries}): "
+                                   f"status={response.status_code}, "
+                                   f"url={self.config.api_url}, "
+                                   f"model={self.config.model}, "
+                                   f"response={err_msg}")
                         if attempt < max_retries:
                             logger.info(f"Retrying in {retry_delay}s...")
                             import time
@@ -187,8 +191,12 @@ class WhisperClient:
                             continue
                         raise WhisperAPIError(f"Server error after {max_retries} attempts: {err_msg}")
                     elif response.status_code != 200:
-                        logger.error(f"API error: {response.status_code} - {response.text[:500]}")
-                        raise WhisperAPIError(f"API error ({response.status_code}): {response.text[:300]}")
+                        err_msg = response.text
+                        logger.error(f"API error: status={response.status_code}, "
+                                   f"url={self.config.api_url}, "
+                                   f"model={self.config.model}, "
+                                   f"response={err_msg}")
+                        raise WhisperAPIError(f"API error ({response.status_code}): {err_msg}")
 
                     result = response.json()
                     text = result.get("text", "").strip()
