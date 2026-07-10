@@ -1,5 +1,6 @@
 """Main application entry point for Turbo Whisper."""
 
+import json
 import logging
 import os
 import subprocess
@@ -8,6 +9,79 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+
+def _load_hallucination_patterns() -> list[str]:
+    """Load hallucination filter patterns from JSON file."""
+    patterns = []
+
+    # Load from JSON file
+    json_path = Path(__file__).parent / "assets" / "base_hallucination_filter.json"
+    if json_path.exists():
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for lang_items in data.values():
+                for item in lang_items:
+                    if item and item.strip():
+                        patterns.append(item.strip())
+        except Exception as e:
+            print(f"Warning: Could not load hallucination filter: {e}")
+
+    # Also add substring checks for "субтитры" derivatives
+    patterns.append("субтитр")
+
+    # Additional Russian-specific hallucination patterns
+    ru_patterns = [
+        "ВЕСЕЛАЯ МУЗЫКА", "СПОКОЙНАЯ МУЗЫКА", "ГРУСТНАЯ МЕЛОДИЯ",
+        "ЛИРИЧЕСКАЯ МУЗЫКА", "ДИНАМИЧНАЯ МУЗЫКА", "ТАИНСТВЕННАЯ МУЗЫКА",
+        "ТОРЖЕСТВЕННАЯ МУЗЫКА", "ИНТРИГУЮЩАЯ МУЗЫКА", "НАПРЯЖЕННАЯ МУЗЫКА",
+        "ПЕЧАЛЬНАЯ МУЗЫКА", "ТРЕВОЖНАЯ МУЗЫКА", "МУЗЫКАЛЬНАЯ ЗАСТАВКА",
+        "ПЕРЕСТРЕЛКА", "ГУДОК ПОЕЗДА", "РЁВ МОТОРА", "ШУМ ДВИГАТЕЛЯ",
+        "СИГНАЛ АВТОМОБИЛЯ", "ЛАЙ СОБАК", "ПЕС ЛАЕТ", "КАШЕЛЬ", "ВЫСТРЕЛЫ",
+        "ШУМ ДОЖДЯ", "ПЕСНЯ", "ВЗРЫВ", "ШУМ МОТОРА", "ПЛЕСК ВОДЫ",
+        "ГУДОК АВТОМОБИЛЯ", "ЛАЙ СОБАКИ", "ПО ГРОМКОГОВОРИТЕЛЮ",
+        "ПО ГРОМКОГОВОРИЧЕСКОМ ЯЗЫКЕ", "ПО ТВ.", "АПЛОДИСМЕНТЫ",
+        "ГОРОДСКОЙ ШУМ", "ПОЛИЦИЯ", "СМЕХ", "СТУК В ДВЕРЬ",
+        "ШУМ ДОЖДЯ", "ПОЛИЦЕЙСКАЯ СИРЕНА", "ЗВОНОК В ДВЕРЬ",
+        "Спасибо за субтитры!", "Субтитры добавил DimaTorzok",
+        "Субтитры подогнал «Симон»!",
+        "Редактор субтитров М.Лосева Корректор А.Егорова",
+        "Редактор субтитров А.Синецкая Корректор А.Егорова",
+        "Редактор субтитров Т.Горелова Корректор А.Егорова",
+        "Редактор субтитров Е.Жукова Корректор А.Егорова",
+        "Редактор субтитров А.Захарова Корректор А.Егорова",
+        "Смотрите продолжение во второй части видео.",
+        "Смотрите продолжение в следующей части.",
+        "Смотрите продолжение в следующей части видео.",
+        "Смотрите продолжение в 4 части видео.",
+        "Смотрите продолжение в следующей серии...",
+        "Смотрите продолжение во второй части.",
+        "ПОДПИШИСЬ НА КАНАЛ", "ПОДПИШИСЬ!", "ПОДПИШИСЬ",
+        "Поехали!", "Поехали.",
+        "Девушки отдыхают...",
+        "Пока-пока! Удачи!",
+        "🦜", "💥", "😎", "🤨", "🤔",
+    ]
+    for p in ru_patterns:
+        if p not in patterns:
+            patterns.append(p)
+
+    return patterns
+
+
+# Load hallucination patterns at module level
+_HALLUCINATION_PATTERNS = _load_hallucination_patterns()
+
+
+def _is_hallucination(text: str) -> bool:
+    """Check if text is a hallucination/artifact from the speech model."""
+    text_lower = text.lower()
+    for pattern in _HALLUCINATION_PATTERNS:
+        pattern_lower = pattern.lower()
+        if pattern_lower in text_lower:
+            return True
+    return False
 
 # Platform-specific imports for single-instance locking
 if sys.platform == "win32":
@@ -40,7 +114,6 @@ from turbo_whisper.icons import (
     get_check_icon,
     get_chevron_down_icon,
     get_chevron_up_icon,
-    get_close_icon,
     get_copy_icon,
     get_eye_icon,
     get_eye_off_icon,
@@ -50,7 +123,6 @@ from turbo_whisper.icons import (
 )
 from turbo_whisper.recorder import AudioRecorder
 from turbo_whisper.typer import Typer
-from turbo_whisper.waveform import WaveformWidget
 from turbo_whisper.floating_indicator import FloatingIndicator
 
 
@@ -136,12 +208,14 @@ class RecordingWindow(QWidget):
         super().__init__()
         self.config = config
         self._drag_pos = None
+        self._is_capturing_key = False
+        self._key_listener = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """Set up the main window UI with all settings visible."""
         self.setWindowIcon(get_tray_icon(128, recording=False))
-        self.setWindowTitle("Turbo Whisper")
+        self.setWindowTitle("Turbo Whisper v1.0.0")
 
         # Normal window with Windows default styling
         self._base_window_flags = (
@@ -151,6 +225,7 @@ class RecordingWindow(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Enable focus events
 
         container = QWidget(self)
+        self.container = container
         container.setObjectName("container")
         container.setStyleSheet(
             """
@@ -231,16 +306,6 @@ class RecordingWindow(QWidget):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(6)
 
-        # === Waveform ===
-        self.waveform = WaveformWidget(
-            color="#84cc16",
-            bg_color="#000000",  # Black background for waveform
-        )
-        self.waveform.setMinimumHeight(100)
-        self.waveform.setMaximumHeight(120)
-        self.waveform.setStyleSheet("background-color: #000000; border-radius: 4px;")
-        layout.addWidget(self.waveform)
-
         # === Status ===
         status_widget = QWidget()
         status_widget.setStyleSheet("background: transparent;")
@@ -252,8 +317,8 @@ class RecordingWindow(QWidget):
         status_layout.addWidget(self.status_label)
         status_layout.addStretch()
 
-        self._hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        self.hints_label = QLabel(f"Hotkey: {self._hotkey_str}")
+        #self._hotkey_str = "+".join(k.title() for k in self.config.hotkey)
+        self.hints_label = QLabel(f"Hotkey: {self.config.hotkey}")
         self.hints_label.setStyleSheet("color: #666; font-size: 10px;")
         status_layout.addWidget(self.hints_label)
 
@@ -275,23 +340,6 @@ class RecordingWindow(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(container)
-
-        # Close button
-        self.close_btn = QPushButton(container)
-        self.close_btn.setIcon(get_close_icon(14, "#666666"))
-        self.close_btn.setFixedSize(20, 20)
-        self.close_btn.setToolTip("Close")
-        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.close_btn.setStyleSheet("QPushButton { background: transparent; border: none; }")
-        self.close_btn.clicked.connect(self._close_window)
-        self.close_btn.enterEvent = lambda e: self.close_btn.setIcon(get_close_icon(14, "#0078d4"))
-        self.close_btn.leaveEvent = lambda e: self.close_btn.setIcon(get_close_icon(14, "#666666"))
-        self.close_btn.move(self.config.window_width - 28, 8)
-        self.close_btn.raise_()
-
-        self.version_label = QLabel("v1.0.0", container)
-        self.version_label.setStyleSheet("color: #666; font-size: 10px;")
-        self.version_label.move(12, 8)
 
         # Set size - wider and taller to fit all settings
         self.setFixedSize(self.config.window_width + 40, self.config.window_height + 480)
@@ -444,15 +492,17 @@ class RecordingWindow(QWidget):
             "border-radius: 2px; color: #000000; padding: 4px; font-size: 11px; }"
         )
         hotkey_row.addWidget(self.hotkey_modifier_combo)
+        self.hotkey_modifier_combo.currentIndexChanged.connect(self._update_hotkey_preview)
 
-        # Key input
+        # Key input - simple editable text field
         self.hotkey_key_input = QLineEdit()
-        self.hotkey_key_input.setPlaceholderText("Key (e.g., F8, ~, A)")
+        self.hotkey_key_input.setPlaceholderText("e.g. F8, ~, A")
         self.hotkey_key_input.setMaximumWidth(100)
         self.hotkey_key_input.setStyleSheet(
             "QLineEdit { background-color: #ffffff; border: 1px solid #cccccc; "
             "border-radius: 2px; color: #000000; padding: 4px; font-size: 11px; }"
         )
+        self.hotkey_key_input.textChanged.connect(self._on_hotkey_key_changed)
         hotkey_row.addWidget(self.hotkey_key_input)
 
         # Preview
@@ -629,31 +679,84 @@ class RecordingWindow(QWidget):
     def _update_hotkey_display(self) -> None:
         """Update hotkey display from current config."""
         hotkey = self.config.hotkey
-        modifiers = []
-        main_key = ""
+        modifiers = set()
+        main_key = "~"
 
         for key in hotkey:
             key_lower = key.lower()
             if key_lower in ("ctrl", "shift", "alt", "super", "win"):
-                modifiers.append(key_lower)
+                modifiers.add(key_lower)
             else:
                 main_key = key
 
-        # Set modifier combo
-        mod_str = " + ".join(m.title() for m in sorted(modifiers))
-        if mod_str:
-            mod_str += " +"
-        else:
-            mod_str = "None (single key)"
+        # Set modifier combo by matching modifier set
+        combo_items = {
+            frozenset(): "None (single key)",
+            frozenset(["ctrl"]): "Ctrl +",
+            frozenset(["shift"]): "Shift +",
+            frozenset(["alt"]): "Alt +",
+            frozenset(["ctrl", "shift"]): "Ctrl + Shift +",
+            frozenset(["ctrl", "alt"]): "Ctrl + Alt +",
+            frozenset(["shift", "alt"]): "Shift + Alt +",
+            frozenset(["ctrl", "shift", "alt"]): "Ctrl + Shift + Alt +",
+            frozenset(["win"]): "Win +",
+            frozenset(["win", "ctrl"]): "Win + Ctrl +",
+            frozenset(["win", "shift"]): "Win + Shift +",
+            frozenset(["win", "ctrl", "shift", "alt"]): "Win + Ctrl + Alt +",
+        }
 
-        # Find matching combo item
+        mod_set = frozenset(modifiers)
         for i in range(self.hotkey_modifier_combo.count()):
-            if self.hotkey_modifier_combo.itemText(i).rstrip(" +") == mod_str.rstrip(" +"):
+            item_text = self.hotkey_modifier_combo.itemText(i)
+            if item_text == combo_items.get(mod_set, ""):
                 self.hotkey_modifier_combo.setCurrentIndex(i)
                 break
 
-        # Set key input (uppercase Latin)
-        self.hotkey_key_input.setText(main_key.upper() if main_key else "")
+        # Set key input (keep original case for special keys like F8, use uppercase for letters)
+        if main_key == "~":
+            self.hotkey_key_input.setText("~")
+        else:
+            self.hotkey_key_input.setText(main_key.upper() if main_key else "")
+
+        self._update_hotkey_preview()
+
+    def _on_hotkey_key_changed(self, text: str) -> None:
+        """Handle hotkey key input: keep only last char, map Russian to Latin."""
+        if not text:
+            return
+
+        # Keep only the last character
+        last_char = text[-1]
+
+        # Russian letters to Latin QWERTY mapping
+        ru_to_latin = {
+            'а': 'F', 'б': ',', 'в': 'D', 'г': 'U', 'д': 'L', 'е': 'T',
+            'ё': '~', 'ж': ';', 'з': 'P', 'и': 'B', 'й': 'Q', 'к': 'R',
+            'л': 'K', 'м': 'V', 'н': 'Y', 'о': 'J', 'п': 'G', 'р': 'H',
+            'с': 'C', 'т': 'N', 'у': 'E', 'ф': 'A', 'х': '[', 'ц': 'W',
+            'ч': 'X', 'ш': 'I', 'щ': 'O', 'ъ': ']', 'ы': 'S', 'ь': 'M',
+            'э': "'", 'ю': '.', 'я': 'Z',
+            'А': 'F', 'Б': ',', 'В': 'D', 'Г': 'U', 'Д': 'L', 'Е': 'T',
+            'Ё': '~', 'Ж': ';', 'З': 'P', 'И': 'B', 'Й': 'Q', 'К': 'R',
+            'Л': 'K', 'М': 'V', 'Н': 'Y', 'О': 'J', 'П': 'G', 'Р': 'H',
+            'С': 'C', 'Т': 'N', 'У': 'E', 'Ф': 'A', 'Х': '[', 'Ц': 'W',
+            'Ч': 'X', 'Ш': 'I', 'Щ': 'O', 'Ъ': ']', 'Ы': 'S', 'Ь': 'M',
+            'Э': "'", 'Ю': '.', 'Я': 'Z',
+        }
+
+        # Check if it's a Russian letter
+        if last_char in ru_to_latin:
+            mapped = ru_to_latin[last_char]
+            self.hotkey_key_input.setText(mapped)
+        else:
+            # For Latin letters - uppercase
+            if last_char.isalpha() and ord(last_char) < 128:
+                self.hotkey_key_input.setText(last_char.upper())
+            else:
+                # For everything else, keep the last char as-is
+                self.hotkey_key_input.setText(last_char)
+
+        # Update preview
         self._update_hotkey_preview()
 
     def _update_hotkey_preview(self) -> None:
@@ -701,6 +804,14 @@ class RecordingWindow(QWidget):
             self._on_focus_change(False)
         super().focusOutEvent(event)
 
+    def eventFilter(self, obj, event):
+        """Event filter for hotkey key input capture."""
+        if obj == self.hotkey_key_input:
+            if event.type() == event.Type.MouseButtonPress:
+                self._start_key_capture()
+                return True
+        return super().eventFilter(obj, event)
+
     def set_status(self, text: str, animate: bool = False) -> None:
         self._base_status = text
         self._status_dots = 0
@@ -712,7 +823,8 @@ class RecordingWindow(QWidget):
 
     def set_recording_hint(self, recording: bool) -> None:
         action = "Stop" if recording else "Start"
-        self.hints_label.setText(f"{action}: {self._hotkey_str}")
+        hotkey_str = "+".join(k.title() for k in self.config.hotkey)
+        self.hints_label.setText(f"{action}: {hotkey_str}")
 
     def update_mic_level(self, level: float) -> None:
         if abs(level - self._current_mic_level) > 0.01 or level == 0:
@@ -762,7 +874,6 @@ class RecordingWindow(QWidget):
             self.sensitivity_slider.setValue(snapped)
             self.sensitivity_slider.blockSignals(False)
             value = snapped
-        self.waveform.sensitivity = value
         self.gain_value_label.setText(f"{value}%")
         self._update_sensitivity_style()
 
@@ -848,31 +959,24 @@ class RecordingWindow(QWidget):
         self.config.silence_threshold_ms = self.silence_slider.value()
         self.config.vad_aggressiveness = self.vad_slider.value()
 
+        # Hotkey setting - apply before saving
+        new_hotkey = self._build_hotkey_from_ui()
+        if new_hotkey != self.config.hotkey:
+            self.config.hotkey = new_hotkey
+            logger.info(f"Hotkey changed to: {new_hotkey}")
+
         # Save config
         self.config.save()
         self.config.apply_autostart()
 
         # Restart hotkey manager if hotkey changed
-        if new_hotkey != self.config.hotkey:
-            self.config.hotkey = new_hotkey
-            # Signal to parent to restart hotkey manager
-            if hasattr(self, '_on_hotkey_changed'):
-                self._on_hotkey_changed(new_hotkey)
-            logger.info(f"Hotkey changed to: {new_hotkey}")
+        if hasattr(self, '_on_hotkey_changed'):
+            self._on_hotkey_changed(self.config.hotkey)
+            logger.info("Hotkey manager restart signaled with: %s", self.config.hotkey)
 
-        # Update floating indicator hotkey
-        hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        if hasattr(self, '_floating_indicator'):
-            self._floating_indicator._hotkey_str = hotkey_str
-            self._floating_indicator.set_idle()
-
-        # Update tray tooltip
-        if hasattr(self, 'tray'):
-            self.tray.setToolTip(f"Turbo Whisper - Press {hotkey_str} to dictate")
-            self.toggle_action.setText(f"Start Recording ({hotkey_str})")
-
-        # Show tray notification
-        self._show_notification("Turbo Whisper", "Settings saved", QSystemTrayIcon.MessageIcon.Information)
+        # Show tray notification via callback
+        if hasattr(self, '_on_settings_saved'):
+            self._on_settings_saved()
 
         self.save_btn.setText("✓ Saved!")
         QTimer.singleShot(1500, lambda: self.save_btn.setText("Save Settings"))
@@ -990,11 +1094,17 @@ class RecordingWindow(QWidget):
         self.move(x, y)
 
     def mousePressEvent(self, event) -> None:
+        # Always let child widgets handle their own events first
+        # Only start drag if click is on the empty window background
         if event.button() == Qt.MouseButton.LeftButton:
-            if hasattr(self.windowHandle(), "startSystemMove"):
-                self.windowHandle().startSystemMove()
-            else:
-                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            # Check if we clicked on a child widget that should handle clicks
+            child = self.childAt(event.position().toPoint())
+            if child is not None and child is not self:
+                # Click is on a child - don't intercept
+                return
+
+            # Click is on empty window space - start drag
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event) -> None:
@@ -1032,6 +1142,7 @@ class TurboWhisper:
         self.window = RecordingWindow(self.config)
         self.window._on_focus_change = self._on_window_focus_change
         self.window._on_hotkey_changed = self._restart_hotkey_manager
+        self.window._on_settings_saved = self._on_settings_saved
         self._setup_tray()
 
         self.is_recording = False
@@ -1209,13 +1320,35 @@ class TurboWhisper:
 
     def _show_window(self) -> None:
         """Show the main window with all settings."""
-        self.window.waveform.set_recording(False)
+        # Block opening settings while recording
+        if self.is_recording or self.is_processing:
+            hotkey_str = "+".join(k.title() for k in self.config.hotkey)
+            self._show_notification(
+                "Turbo Whisper",
+                f"Please stop recording (press {hotkey_str} again) before opening settings",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+            return
         self._update_icons(recording=False)
         self.window.set_status("Ready", animate=False)
         self.window.center_on_screen()
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
+
+    def _on_settings_saved(self) -> None:
+        """Show notification when settings are saved."""
+        self._show_notification("Turbo Whisper", "Settings saved", QSystemTrayIcon.MessageIcon.Information)
+
+        # Update floating indicator hotkey
+        hotkey_str = "+".join(k.title() for k in self.config.hotkey)
+        self._floating_indicator._hotkey_str = hotkey_str
+        self._floating_indicator.set_idle()
+
+        # Update tray tooltip
+        self.tray.setToolTip(f"Turbo Whisper - Press {hotkey_str} to dictate")
+        self.toggle_action.setText(f"Start Recording ({hotkey_str})")
 
     def _on_window_focus_change(self, has_focus: bool) -> None:
         """Handle window focus changes to disable/enable hotkey."""
@@ -1236,8 +1369,15 @@ class TurboWhisper:
                 except Exception as e:
                     logger.error(f"Failed to start hotkey manager: {e}")
 
-    def _restart_hotkey_manager(self, new_hotkey: list[str] = None) -> None:
+    def _restart_hotkey_manager(self, new_hotkey: list[str] = None, temp_stop: bool = False) -> None:
         """Restart hotkey manager with new hotkey combination."""
+        if temp_stop:
+            # Temporarily stop hotkey manager (for key capture)
+            if self.hotkey_manager:
+                self.hotkey_manager.stop()
+                logger.info("Hotkey manager stopped for key capture")
+            return
+
         if new_hotkey:
             self.config.hotkey = new_hotkey
 
@@ -1454,23 +1594,17 @@ class TurboWhisper:
 
             # Filter out common model artifacts
             text = text.strip()
-            skip_patterns = [
-                "Продолжение следует...",
-                "Субтитры создавал DimaTorzok",
-            ]
-            # Check if text contains any artifact (not just exact match)
-            if any(pattern in text for pattern in skip_patterns):
+            if _is_hallucination(text):
                 logger.debug(f"Chunk #{chunk_seq}: model artifact '{text[:50]}', skipping")
                 continue
 
             logger.info(f"Chunk #{chunk_seq}: typing '{text[:50]}'")
 
-            # Add space before chunk if not the first one
-            text_to_type = text if not self._pending_chunk_texts else " " + text
-
-            # Type the chunk text
+            # Type the chunk text, then add space after
             if self.config.auto_paste:
-                self.typer.type_text(text_to_type)
+                self.typer.type_text(text)
+                # Add space after chunk for separation
+                self.typer.type_text(" ")
 
             # Accumulate text for full message
             self._pending_chunk_texts.append(text)
@@ -1545,18 +1679,14 @@ class TurboWhisper:
             try:
                 text = self.client.transcribe_sync(remaining_chunk)
                 if text:
-                    # Filter out model artifacts (strip first for comparison)
+                    # Filter out model artifacts
                     clean_text = text.strip()
-                    skip_patterns = [
-                        "Продолжение следует...",
-                        "Субтитры создавал DimaTorzok",
-                    ]
-                    # Check if text contains any artifact (not just exact match)
-                    if not any(pattern in clean_text for pattern in skip_patterns) and clean_text:
+                    if not _is_hallucination(clean_text) and clean_text:
                         # Type the final chunk immediately
-                        text_to_type = clean_text if not self._pending_chunk_texts else " " + clean_text
                         if self.config.auto_paste:
-                            self.typer.type_text(text_to_type)
+                            self.typer.type_text(clean_text)
+                            # Add space after for separation
+                            self.typer.type_text(" ")
                         self._pending_chunk_texts.append(clean_text)
                         logger.info(f"Final chunk transcribed and typed: '{clean_text[:50]}'")
             except Exception as e:
@@ -1652,7 +1782,6 @@ class TurboWhisper:
     def _poll_waveform_data(self) -> None:
         if self._pending_waveform_data is not None:
             level, waveform_buffer = self._pending_waveform_data
-            self.window.waveform.update_waveform(level, waveform_buffer)
             self.window.update_mic_level(level)
             # Always update floating indicator with audio level
             self._floating_indicator.update_level(level)
@@ -1718,11 +1847,7 @@ class TurboWhisper:
 
         # Filter out model artifacts
         clean_text = text.strip()
-        skip_patterns = [
-            "Продолжение следует...",
-            "Субтитры создавал DimaTorzok",
-        ]
-        if any(pattern in clean_text for pattern in skip_patterns):
+        if _is_hallucination(clean_text):
             logger.debug(f"Batch mode: model artifact '{clean_text[:50]}', skipping")
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
             QTimer.singleShot(2000, self._floating_indicator.set_idle)

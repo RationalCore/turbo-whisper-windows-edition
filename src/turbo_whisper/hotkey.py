@@ -157,9 +157,16 @@ class PortalHotkeyManager:
 
 
 class WinApiHotkeyManager:
-    """Windows hotkey manager using RegisterHotKey WinAPI.
+    """Windows hotkey manager using RegisterHotKey WinAPI with double-tap detection.
 
-    Does NOT block all keyboard input — only the configured hotkey is intercepted.
+    For modifier combos (Ctrl+Space, Alt+~): uses RegisterHotKey — fires callback immediately.
+    For single-character hotkeys (~, `, ё, etc.): uses RegisterHotKey with a 350ms
+    detection window. This allows:
+      - Single press -> wait 350ms, then toggle recording
+      - Double press (within 350ms) -> type the character once in the active window
+      The 350ms delay only applies to single-character hotkeys; modifier combos fire instantly.
+
+    Does NOT block any keyboard input — only the configured hotkey is intercepted.
     Runs the message pump on a background thread.
     """
 
@@ -171,6 +178,13 @@ class WinApiHotkeyManager:
         self._hotkey_id = 1
         self._modifiers = 0
         self._vk = 0
+        self._is_single_char = False
+
+        # Double-tap detection state
+        self._double_tap_ms = 350  # Time window for double-tap detection
+        self._first_press_time = 0
+        self._double_tap_timer = None
+        self._shift_at_first_press = False  # Shift state captured at first press for double-tap
 
         # Parse hotkey combo
         self._parse_combo(hotkey_combo)
@@ -213,11 +227,23 @@ class WinApiHotkeyManager:
             main_key = "~"
 
         # Convert main key to virtual key code
-        # For most printable characters, VkKeyScanEx/Ord lookup via ctypes
         self._vk = self._char_to_vk(main_key)
-        self._modifiers = modifiers | MOD_NOREPEAT  # Prevent repeat on hold
+        self._modifiers = modifiers  # Start without NOREPEAT
 
-        logger.info(f"WinApiHotkeyManager: combo={combo}, mods=0x{self._modifiers:04x}, vk=0x{self._vk:02x}")
+        # Detect if this is a single-character hotkey (no modifiers, one char key)
+        self._is_single_char = (modifiers == 0) and (len(combo) == 1) and (len(main_key) == 1)
+
+        # For modifier combos: add NOREPEAT (they fire once per press, no double-tap needed)
+        # For single-char: NO NOREPEAT — we need to receive repeated WM_HOTKEY for double-tap detection
+        if not self._is_single_char:
+            self._modifiers |= MOD_NOREPEAT
+
+        # Increase detection window for single-char hotkeys
+        if self._is_single_char:
+            self._double_tap_ms = 400  # Slightly longer for comfort
+
+        logger.info(f"WinApiHotkeyManager: combo={combo}, mods=0x{self._modifiers:04x}, "
+                    f"vk=0x{self._vk:02x}, single_char={self._is_single_char}")
 
     def _char_to_vk(self, char: str) -> int:
         """Convert a character to Windows virtual key code."""
@@ -263,102 +289,414 @@ class WinApiHotkeyManager:
         logger.warning(f"Unknown key '{char}', defaulting to VK_OEM_3 (~)")
         return 0xC0
 
-    def _winapi_worker(self) -> None:
-        """Background thread: create hidden window, register hotkey, run message loop."""
+    def _on_single_press_timeout(self) -> None:
+        """Called when the double-tap detection timer expires (single press detected)."""
+        self._first_press_time = 0
+        self._double_tap_timer = None
+        logger.info("Single press detected via double-tap timeout, triggering callback")
+        self.callback()
+
+    def _get_char_from_vk(self, vk_code: int, shift_pressed: bool = False) -> str:
+        """Convert a virtual key code to the actual character using current keyboard layout.
+
+        Uses ToUnicodeEx WinAPI which respects:
+        - Current keyboard layout (layout-aware)
+        - Shift state (via shift_pressed parameter or GetAsyncKeyState)
+        - CapsLock state
+        - Dead key sequences
+
+        Rather than relying on GetKeyboardState (which may not reflect modifier
+        state correctly when called from a background thread hook), we manually
+        construct the keyboard state buffer with known modifier states.
+
+        Args:
+            vk_code: Windows virtual key code (e.g. 0xC0 for VK_OEM_3)
+            shift_pressed: If True, synthesizes Shift state in the keyboard buffer
+
+        Returns:
+            Character string (e.g. '~', '`', 'ё', 'a', '1'), or empty string if no mapping.
+        """
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # Get current keyboard layout for the foreground thread
+        foreground_tid = user32.GetWindowThreadProcessId(
+            user32.GetForegroundWindow(), None
+        )
+        layout = user32.GetKeyboardLayout(foreground_tid)
+
+        # Manually build keyboard state buffer with known modifiers
+        # This is more reliable than GetKeyboardState from a background thread
+        keyboard_state = ctypes.create_string_buffer(256)
+        ctypes.memset(keyboard_state, 0, 256)
+
+        VK_SHIFT = 0x10
+        VK_CAPITAL = 0x14
+
+        # Check if Shift is pressed via GetAsyncKeyState (works from any thread)
+        if shift_pressed or (user32.GetAsyncKeyState(VK_SHIFT) & 0x8000):
+            keyboard_state[VK_SHIFT] = 0x81  # Key down + toggle state
+
+        # Check CapsLock
+        if user32.GetKeyState(VK_CAPITAL) & 0x01:
+            keyboard_state[VK_CAPITAL] = 0x01  # Toggled on
+
+        # Get scan code from virtual key
+        scan_code = user32.MapVirtualKeyW(vk_code, 0)
+
+        # Buffer for the resulting character (Unicode)
+        char_buf = ctypes.create_unicode_buffer(8)
+
+        # Convert VK to Unicode using ToUnicodeEx with flags=1
+        # Flag 1 = do not modify dead key state (keeps keyboard state consistent)
+        # This prevents ToUnicodeEx from consuming dead keys and affecting
+        # subsequent keyboard input in the active window.
+        result_len = user32.ToUnicodeEx(
+            vk_code,
+            scan_code,
+            keyboard_state,
+            char_buf,
+            len(char_buf),
+            1,  # flags=1: no dead key state modification
+            layout,
+        )
+
+        if result_len > 0:
+            return char_buf.value[0:result_len]
+
+        # If result is 0 (dead key or no mapping), try once more with flags=0
+        # to get the actual character (some layouts need this)
+        result_len = user32.ToUnicodeEx(
+            vk_code,
+            scan_code,
+            keyboard_state,
+            char_buf,
+            len(char_buf),
+            0,  # flags=0: may modify dead key state
+            layout,
+        )
+
+        if result_len > 0:
+            return char_buf.value[0:result_len]
+
+        return ""
+
+    def _insert_char_via_clipboard(self, char: str) -> None:
+        """Insert a single character into the active window using clipboard paste.
+
+        Uses the same reliable mechanism as Typer._type_clipboard_paste:
+        1. Copy character to clipboard via pyperclip or clip.exe
+        2. Simulate Ctrl+V via keybd_event
+
+        This bypasses UIPI and works cross-process.
+        """
+        import ctypes
+        import time
+
+        user32 = ctypes.windll.user32
+        VK_CONTROL = 0x11
+        VK_V = 0x56
+        KEYEVENTF_KEYUP = 0x0002
+
+        # Step 1: Copy char to clipboard
+        try:
+            import pyperclip
+            pyperclip.copy(char)
+        except Exception:
+            try:
+                import subprocess as sp
+                import io
+                proc = sp.Popen(["clip.exe"], stdin=sp.PIPE, shell=True)
+                encoded = char.encode("utf-16-le") + b"\0\0"
+                proc.communicate(input=encoded)
+            except Exception:
+                logger.error("_insert_char_via_clipboard: clipboard copy failed")
+                return
+
+        time.sleep(0.05)
+
+        # Step 2: Paste via keybd_event (NOT blocked by UIPI)
+        user32.keybd_event(VK_CONTROL, 0, 0, 0)        # Ctrl down
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0, 0, 0)               # V down
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0) # V up
+        time.sleep(0.02)
+        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
+
+        logger.info(f"_insert_char_via_clipboard: pasted char='{char}'")
+
+    def _hook_worker(self) -> None:
+        """Background thread for single-character hotkeys: use WH_KEYBOARD_LL hook
+        with double-tap detection and CapsLock/Shift-aware character mapping.
+
+        On first press → start detection timer, block the key.
+        On second press within timeout → inject a single character, don't toggle.
+        On timeout → call callback (toggle).
+
+        Shift state is captured at the time of the first key press, so that when
+        double-tap occurs (both presses blocked), the correct shifted character
+        (e.g., '~' instead of '`') is determined based on what the user intended.
+        """
+        import ctypes
+        import ctypes.wintypes
+        import threading
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # Save thread ID for proper cleanup in stop()
+        self._hook_thread_id = threading.current_thread().ident
+
+        WH_KEYBOARD_LL = 13
+        WM_KEYDOWN = 0x0100
+
+        class KBDLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("vkCode", ctypes.c_uint32),
+                ("scanCode", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_uint64),
+            ]
+
+        HOOKPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_int64,     # LRESULT (64-bit signed)
+            ctypes.c_int,       # int nCode (32-bit)
+            ctypes.c_void_p,    # WPARAM
+            ctypes.c_void_p,    # LPARAM
+        )
+
+        def hook_proc(nCode, wParam, lParam):
+            if nCode >= 0 and wParam == WM_KEYDOWN:
+                kb = KBDLLHOOKSTRUCT.from_address(lParam)
+                if kb.vkCode == self._vk:
+                    VK_SHIFT = 0x10
+                    VK_CONTROL = 0x11
+                    VK_MENU = 0x12  # Alt
+                    VK_LWIN = 0x5B
+                    VK_RWIN = 0x5C
+
+                    # Check if Ctrl/Alt/Win is held — pass through, don't interfere
+                    if (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_MENU) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_LWIN) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_RWIN) & 0x8000):
+                        return user32.CallNextHookEx(0, nCode, wParam, lParam)
+
+                    # Save Shift state at the time of this key press for double-tap detection
+                    shift_held = bool(user32.GetAsyncKeyState(VK_SHIFT) & 0x8000)
+
+                    now = time.time() * 1000
+
+                    if self._first_press_time == 0:
+                        # First press: save shift state and start detection timer
+                        self._first_press_time = now
+                        self._shift_at_first_press = shift_held
+                        self._double_tap_timer = threading.Timer(
+                            self._double_tap_ms / 1000.0,
+                            self._on_single_press_timeout,
+                        )
+                        self._double_tap_timer.daemon = True
+                        self._double_tap_timer.start()
+                        logger.debug(f"Hook: first press, timer started (shift={shift_held})")
+                        # Block this key press
+                        return 1
+                    else:
+                        # Second press within timeout window
+                        elapsed = now - self._first_press_time
+                        if elapsed < self._double_tap_ms:
+                            # Double-tap detected: cancel timer and inject character
+                            if self._double_tap_timer:
+                                self._double_tap_timer.cancel()
+                                self._double_tap_timer = None
+                            self._first_press_time = 0
+
+                            # Use Shift state from first press for correct character case
+                            char = self._get_char_from_vk(self._vk, shift_pressed=self._shift_at_first_press)
+                            if char:
+                                self._insert_char_via_clipboard(char)
+                                logger.info(f"Hook: Double-tap detected, pasted char='{char}' (shift={self._shift_at_first_press})")
+                            else:
+                                logger.warning(f"Hook: Double-tap detected but no char mapping for vk=0x{self._vk:02x}")
+
+                            # Block this press too (we already inserted the character)
+                            return 1
+                        else:
+                            # Past timer window: reset
+                            self._first_press_time = 0
+
+            return user32.CallNextHookEx(0, nCode, wParam, lParam)
+
+        # Set proper argtypes for CallNextHookEx to match HOOKPROC signatures
+        user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p,  # HHOOK
+            ctypes.c_int,     # int nCode
+            ctypes.c_void_p,  # WPARAM (matches HOOKPROC)
+            ctypes.c_void_p,  # LPARAM (matches HOOKPROC)
+        ]
+        user32.CallNextHookEx.restype = ctypes.c_int64  # LRESULT
+
+        # Install WH_KEYBOARD_LL hook
+        # MSDN: For WH_KEYBOARD_LL, hMod MUST be NULL (0) because the hook procedure
+        # is in the module mapped into the current process. Using GetModuleHandleW
+        # causes ERROR_MOD_NOT_FOUND (126) on most systems.
+        self._hook_proc = HOOKPROC(hook_proc)
+        hook_id = user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            self._hook_proc,
+            0,  # NULL — correct for WH_KEYBOARD_LL per MSDN
+            0,  # dwThreadId=0 -> global hook
+        )
+
+        if not hook_id:
+            error_code = ctypes.windll.kernel32.GetLastError()
+            logger.error(f"WinAPI: Failed to install WH_KEYBOARD_LL hook (error={error_code})")
+            logger.warning("Falling back to RegisterHotKey (no double-tap)")
+            return
+
+        self._hook_id = hook_id
+        logger.info(f"WinAPI: WH_KEYBOARD_LL hook installed (id={hook_id})")
+
+        # Message loop (required for low-level hooks to work)
+        msg = ctypes.wintypes.MSG()
+        while self._running:
+            ret = user32.GetMessageW(ctypes.byref(msg), 0, 0, 0)
+            if ret <= 0:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+        # Cleanup
+        user32.UnhookWindowsHookEx(hook_id)
+        self._hook_id = None
+        logger.info("WinAPI: WH_KEYBOARD_LL hook removed")
+
+    def _register_hotkey_worker(self) -> None:
+        """Background thread: use RegisterHotKey.
+
+        For modifier combos: fires callback immediately.
+        For single-character hotkeys: uses timer-based double-tap detection:
+          - First WM_HOTKEY -> start 350ms timer
+          - Second WM_HOTKEY within 350ms -> call _simulate_single_keypress (don't toggle)
+          - Timer expires -> call callback (toggle recording)
+        """
         import ctypes
         import ctypes.wintypes
 
         user32 = ctypes.windll.user32
 
-        # Set proper argument types for all WinAPI functions we use
-        # On 64-bit Windows, WPARAM=UINT_PTR=uint64, LPARAM=LPARAM=int64, LRESULT=int64
         user32.DefWindowProcW.argtypes = [
-            ctypes.c_void_p,  # HWND
-            ctypes.c_uint,    # UINT Msg
-            ctypes.c_uint64,  # WPARAM
-            ctypes.c_int64,   # LPARAM
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int64,
         ]
-        user32.DefWindowProcW.restype = ctypes.c_int64  # LRESULT
+        user32.DefWindowProcW.restype = ctypes.c_int64
 
         user32.RegisterClassW.argtypes = [ctypes.c_void_p]
-        user32.RegisterClassW.restype = ctypes.c_uint16  # ATOM
+        user32.RegisterClassW.restype = ctypes.c_uint16
 
         user32.CreateWindowExW.argtypes = [
-            ctypes.c_uint32,  # DWORD dwExStyle
-            ctypes.c_wchar_p, # LPCWSTR lpClassName
-            ctypes.c_wchar_p, # LPCWSTR lpWindowName
-            ctypes.c_uint32,  # DWORD dwStyle
-            ctypes.c_int,     # int X
-            ctypes.c_int,     # int Y
-            ctypes.c_int,     # int nWidth
-            ctypes.c_int,     # int nHeight
-            ctypes.c_void_p,  # HWND hWndParent
-            ctypes.c_void_p,  # HMENU hMenu
-            ctypes.c_void_p,  # HINSTANCE hInstance
-            ctypes.c_void_p,  # LPVOID lpParam
+            ctypes.c_uint32, ctypes.c_wchar_p, ctypes.c_wchar_p,
+            ctypes.c_uint32, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
         ]
-        user32.CreateWindowExW.restype = ctypes.c_void_p  # HWND
+        user32.CreateWindowExW.restype = ctypes.c_void_p
 
-        user32.RegisterHotKey.argtypes = [
-            ctypes.c_void_p,  # HWND
-            ctypes.c_int,     # int id
-            ctypes.c_uint32,  # UINT fsModifiers
-            ctypes.c_uint32,  # UINT vk
-        ]
-        user32.RegisterHotKey.restype = ctypes.c_int  # BOOL
-
-        user32.UnregisterHotKey.argtypes = [
-            ctypes.c_void_p,  # HWND
-            ctypes.c_int,     # int id
-        ]
-        user32.UnregisterHotKey.restype = ctypes.c_int  # BOOL
-
+        user32.RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32]
+        user32.RegisterHotKey.restype = ctypes.c_int
+        user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.UnregisterHotKey.restype = ctypes.c_int
         user32.DestroyWindow.argtypes = [ctypes.c_void_p]
-        user32.DestroyWindow.restype = ctypes.c_int  # BOOL
-
-        user32.GetMessageW.argtypes = [
-            ctypes.c_void_p,  # LPMSG
-            ctypes.c_void_p,  # HWND
-            ctypes.c_uint,    # UINT wMsgFilterMin
-            ctypes.c_uint,    # UINT wMsgFilterMax
-        ]
-        user32.GetMessageW.restype = ctypes.c_int  # BOOL
-
+        user32.DestroyWindow.restype = ctypes.c_int
+        user32.GetMessageW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        user32.GetMessageW.restype = ctypes.c_int
         user32.TranslateMessage.argtypes = [ctypes.c_void_p]
-        user32.TranslateMessage.restype = ctypes.c_int  # BOOL
-
+        user32.TranslateMessage.restype = ctypes.c_int
         user32.DispatchMessageW.argtypes = [ctypes.c_void_p]
-        user32.DispatchMessageW.restype = ctypes.c_int  # LRESULT
+        user32.DispatchMessageW.restype = ctypes.c_int
 
-        # Define WNDPROC callback type
-        WNDPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_int64,   # LRESULT
-            ctypes.c_void_p,  # HWND
-            ctypes.c_uint,    # UINT
-            ctypes.c_uint64,  # WPARAM
-            ctypes.c_int64,   # LPARAM
-        )
+        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_int64, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint64, ctypes.c_int64)
 
-        # Window class name
         class_name = "TurboWhisperHotkeyWindow"
         hinstance = ctypes.windll.kernel32.GetModuleHandleW(None)
 
-        # Message handler
         WM_HOTKEY = 0x0312
 
         def wndproc(hwnd, msg, wparam, lparam):
             if msg == WM_HOTKEY:
-                logger.info("WinAPI: WM_HOTKEY received")
-                # Call the callback (thread-safe via pyqtSignal)
-                self.callback()
+                now = time.time() * 1000
+
+                if self._is_single_char:
+                    # For single-character hotkeys, check if any modifier is held.
+                    # RegisterHotKey for a plain key (no modifiers) fires even when
+                    # Ctrl/Alt/Shift is pressed — we must ignore those cases and let
+                    # the key combination pass through to the active window.
+                    VK_SHIFT = 0x10
+                    VK_CONTROL = 0x11
+                    VK_MENU = 0x12  # Alt
+                    VK_LWIN = 0x5B
+                    VK_RWIN = 0x5C
+
+                    if (user32.GetAsyncKeyState(VK_CONTROL) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_MENU) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_SHIFT) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_LWIN) & 0x8000 or
+                        user32.GetAsyncKeyState(VK_RWIN) & 0x8000):
+                        # Modifier is held — this is a keyboard shortcut, not our hotkey.
+                        # Let the key pass through to the active window.
+                        # We need to inject the actual character via keybd_event so the
+                        # window receives the expected input.
+                        char = self._get_char_from_vk(self._vk)
+                        if char:
+                            self._insert_char_via_clipboard(char)
+                            logger.info(f"WinAPI: Modifier+single-char detected, injected char='{char}'")
+                        return 0
+
+                    # Ignore auto-repeat (WM_HOTKEY without key release)
+                    # If a timer is already running and the press is too fast (<80ms),
+                    # it's likely auto-repeat from holding the key, not a real double-tap
+                    if self._first_press_time > 0:
+                        elapsed = now - self._first_press_time
+                        if elapsed < 80:
+                            # Auto-repeat: ignore
+                            return 0
+                        if elapsed < self._double_tap_ms:
+                            # Double-tap detected! Cancel timer and inject character
+                            if self._double_tap_timer:
+                                self._double_tap_timer.cancel()
+                                self._double_tap_timer = None
+                            self._first_press_time = 0
+                            # Get the actual character from current keyboard layout
+                            char = self._get_char_from_vk(self._vk)
+                            if char:
+                                self._insert_char_via_clipboard(char)
+                                logger.info(f"WinAPI: Double-tap detected, pasted char='{char}'")
+                            else:
+                                logger.warning(f"WinAPI: Double-tap detected but no char mapping for vk=0x{self._vk:02x}")
+                            return 0
+                        else:
+                            # Past timer window: reset
+                            self._first_press_time = 0
+
+                    # First press (or reset): start detection timer
+                    self._first_press_time = now
+                    self._double_tap_timer = threading.Timer(
+                        self._double_tap_ms / 1000.0,
+                        self._on_single_press_timeout,
+                    )
+                    self._double_tap_timer.daemon = True
+                    self._double_tap_timer.start()
+                    logger.info("WinAPI: Single-char hotkey first press, timer started")
+                else:
+                    # Modifier combo: fire immediately
+                    self.callback()
                 return 0
-            # Default window proc
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
-        # Register window class
         WNDCLASS = ctypes.wintypes.WNDCLASSW if hasattr(ctypes.wintypes, 'WNDCLASSW') else None
         if WNDCLASS is None:
-            # Manual definition
             class WNDCLASS(ctypes.Structure):
                 _fields_ = [
                     ("style", ctypes.c_uint),
@@ -374,7 +712,6 @@ class WinApiHotkeyManager:
                 ]
 
         proc = WNDPROC(wndproc)
-
         wc = WNDCLASS()
         wc.style = 0
         wc.lpfnWndProc = proc
@@ -392,73 +729,86 @@ class WinApiHotkeyManager:
             logger.error("WinAPI: Failed to register window class")
             return
 
-        # Create hidden window
-        hwnd = user32.CreateWindowExW(
-            0,
-            class_name,
-            "TurboWhisperHotkeyWindow",
-            0,  # no window style
-            0, 0, 0, 0,
-            0,  # no parent
-            0,  # no menu
-            hinstance,
-            0,
-        )
+        hwnd = user32.CreateWindowExW(0, class_name, "TurboWhisperHotkeyWindow", 0, 0, 0, 0, 0, 0, 0, hinstance, 0)
         if not hwnd:
             logger.error("WinAPI: Failed to create window")
             return
 
         self._hwnd = ctypes.c_void_p(hwnd)
 
-        logger.info(f"WinAPI: Created hidden window, hwnd={hwnd}")
-
-        # Register hotkey
-        result = user32.RegisterHotKey(
-            hwnd,
-            self._hotkey_id,
-            self._modifiers,
-            self._vk,
-        )
+        result = user32.RegisterHotKey(hwnd, self._hotkey_id, self._modifiers, self._vk)
         if result == 0:
             logger.error(f"WinAPI: RegisterHotKey failed (mods=0x{self._modifiers:04x}, vk=0x{self._vk:02x})")
             user32.DestroyWindow(hwnd)
             return
 
-        logger.info(f"WinAPI: Hotkey registered (id={self._hotkey_id})")
+        logger.info(f"WinAPI: RegisterHotKey registered (id={self._hotkey_id})")
 
-        # Message loop
         msg = ctypes.wintypes.MSG()
         while self._running:
             ret = user32.GetMessageW(ctypes.byref(msg), 0, 0, 0)
             if ret == 0:
-                break  # WM_QUIT
+                break
             if ret == -1:
-                logger.error("WinAPI: GetMessage error")
                 break
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
 
-        # Cleanup
         user32.UnregisterHotKey(hwnd, self._hotkey_id)
         user32.DestroyWindow(hwnd)
         user32.UnregisterClassW(class_name, hinstance)
-        logger.info("WinAPI: Hotkey worker exited")
+        logger.info("WinAPI: RegisterHotKey worker exited")
+
+    def _winapi_worker(self) -> None:
+        """Background thread entry point.
+
+        For single-character hotkeys: tries WH_KEYBOARD_LL hook first for proper
+        double-tap detection with key suppression. Falls back to RegisterHotKey
+        (without NOREPEAT for double-tap detection via repeated WM_HOTKEY, with
+        auto-repeat filtering via <80ms threshold).
+        For modifier combos: RegisterHotKey WITH MOD_NOREPEAT for instant firing.
+        """
+        if self._is_single_char:
+            self._hook_worker()
+            if not hasattr(self, '_hook_id') or not self._hook_id:
+                logger.warning("WH_KEYBOARD_LL hook failed, falling back to RegisterHotKey (no double-tap)")
+                self._register_hotkey_worker()
+        else:
+            self._register_hotkey_worker()
 
     def start(self) -> None:
         if self._running:
             return
         self._running = True
+        self._hook_thread_id = None  # Will be set by the worker if it's a hook-based hotkey
         self._thread = threading.Thread(target=self._winapi_worker, daemon=True)
         self._thread.start()
-        logger.info("WinAPI: Hotkey manager started")
+        logger.info("WinAPI: Hotkey manager started (RegisterHotKey)")
 
     def stop(self) -> None:
         self._running = False
+        # Cancel any pending double-tap timer
+        if self._double_tap_timer:
+            self._double_tap_timer.cancel()
+            self._double_tap_timer = None
+        self._first_press_time = 0
+
         if self._hwnd:
             import ctypes
             user32 = ctypes.windll.user32
             user32.PostMessageW(self._hwnd, 0x0012, 0, 0)  # WM_QUIT
             self._hwnd = None
+
+        # Wake up the hook worker thread if it exists
+        if self._hook_thread_id:
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.PostThreadMessageW(self._hook_thread_id, 0x0012, 0, 0)  # WM_QUIT
+            except Exception:
+                pass
+            self._hook_thread_id = None
+
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
