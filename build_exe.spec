@@ -34,6 +34,7 @@ a = Analysis(
         'turbo_whisper.recorder',
         'turbo_whisper.typer',
         'turbo_whisper.waveform',
+        'turbo_whisper.visualizer_process',
     ],
     hookspath=[],
     hooksconfig={},

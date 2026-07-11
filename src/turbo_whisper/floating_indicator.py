@@ -372,15 +372,20 @@ class FloatingIndicatorProcess:
         if self._proc.state() != QProcess.ProcessState.NotRunning:
             return  # already running
 
-        # Locate the visualizer_process.py module
-        module_dir = Path(__file__).parent
-        script = module_dir / "visualizer_process.py"
-        if not script.exists():
-            logger.error("visualizer_process.py not found at %s", script)
-            return
+        # In a PyInstaller bundle, visualizer_process.py is not an external
+        # file. Launch the same EXE with --visualizer flag instead.
+        if getattr(sys, 'frozen', False):
+            exe = sys.executable
+            self._proc.start(exe, ["--visualizer", self._hotkey_str])
+        else:
+            module_dir = Path(__file__).parent
+            script = module_dir / "visualizer_process.py"
+            if not script.exists():
+                logger.error("visualizer_process.py not found at %s", script)
+                return
+            python = sys.executable
+            self._proc.start(python, [str(script), self._hotkey_str])
 
-        python = sys.executable
-        self._proc.start(python, [str(script), self._hotkey_str])
         if not self._proc.waitForStarted(3000):
             logger.error("Visualizer process failed to start")
             return

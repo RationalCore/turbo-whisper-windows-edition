@@ -358,8 +358,13 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
-    # Read hotkey from command-line arg (passed by FloatingIndicatorProcess)
-    hotkey = sys.argv[1] if len(sys.argv) > 1 else "F8"
+    # Read hotkey from command-line arg (passed by FloatingIndicatorProcess).
+    # When launched via PyInstaller EXE with --visualizer flag, skip the flag.
+    hotkey = "F8"
+    for arg in sys.argv[1:]:
+        if not arg.startswith("--"):
+            hotkey = arg
+            break
 
     window = _IndicatorWindow(hotkey_str=hotkey)
     window.start()

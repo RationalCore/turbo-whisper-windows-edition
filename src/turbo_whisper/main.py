@@ -2095,6 +2095,13 @@ def ensure_single_instance():
 
 
 def main():
+    # When launched as a child visualizer process (PyInstaller build),
+    # run the visualizer event loop instead of the main app.
+    if "--visualizer" in sys.argv:
+        from turbo_whisper.visualizer_process import main as viz_main
+        viz_main()
+        return
+
     ensure_single_instance()
     app = TurboWhisper()
     sys.exit(app.run())
