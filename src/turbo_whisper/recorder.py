@@ -249,7 +249,9 @@ class AudioRecorder:
                         silence_frames = frame_count - self._last_speech_frame
                         silence_duration = silence_frames * self.config.chunk_size / self.config.sample_rate
                         if silence_duration >= self.config.auto_stop_timeout:
-                            logger.info(f"Auto-stop: no speech for {silence_duration:.0f}s")
+                            logger.info(f"Auto-stop fire: frame={frame_count}, "
+                                      f"silence={silence_duration:.1f}s, "
+                                      f"threshold={self.config.auto_stop_timeout}s")
                             self._on_auto_stop()
 
                 # Always update waveform buffer
@@ -348,10 +350,12 @@ class AudioRecorder:
         """Disable streaming mode without stopping the recorder.
 
         The recorder continues running for visual feedback, but
-        no new chunks will be created.
+        no new chunks will be created and auto-stop will not fire.
         """
+        logger.info("disable_streaming: clearing on_chunk_ready + on_auto_stop")
         self._streaming_mode = False
         self._on_chunk_ready = None
+        self._on_auto_stop = None
         self._chunk_interval_frames = 0
         logger.info("Streaming mode disabled (recorder still running)")
 

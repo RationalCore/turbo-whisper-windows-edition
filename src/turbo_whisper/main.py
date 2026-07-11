@@ -1522,6 +1522,7 @@ class TurboWhisper:
     def _toggle_recording(self) -> None:
         now = time.time()
         if hasattr(self, '_last_toggle') and (now - self._last_toggle) < 0.25:
+            logger.debug(f"_toggle_recording: debounced ({(now - self._last_toggle)*1000:.0f}ms since last)")
             return
         self._last_toggle = now
 
@@ -1652,7 +1653,8 @@ class TurboWhisper:
 
     def _on_auto_stop(self) -> None:
         """Called when auto-stop timeout is reached (no speech detected)."""
-        logger.info("Auto-stop triggered - stopping recording")
+        import threading
+        logger.info(f"Auto-stop triggered (thread={threading.current_thread().name}), emitting toggle_recording")
         # Use signals to toggle recording from main thread
         self.signals.toggle_recording.emit()
 
@@ -1806,6 +1808,12 @@ class TurboWhisper:
         """Stop streaming recording and save combined message to history."""
         logger.info("_stop_streaming_recording: starting cleanup")
 
+        # CRITICAL: disable streaming in the recorder FIRST so the
+        # recorder thread stops firing more auto-stop / chunk signals
+        # (otherwise dozens of queued toggle_recording signals cause an
+        # infinite start-stop loop after cleanup completes).
+        self.recorder.disable_streaming()
+
         # Stop the ordered processing timer
         self._chunk_order_timer.stop()
 
@@ -1818,6 +1826,8 @@ class TurboWhisper:
                 break
             logger.info(f"Waiting for {len(alive_threads)} transcription threads to complete...")
             time.sleep(0.2)
+        logger.info(f"_stop_streaming_recording: thread wait done in {time.time()-wait_start:.1f}s, "
+                    f"{len([t for t in self._chunk_transcription_threads if t.is_alive()])} still alive")
 
         # Process any remaining chunks in the queue
         self._process_chunk_queue()
