@@ -351,6 +351,26 @@ class RecordingWindow(QWidget):
         self._status_timer.setInterval(400)
         layout.addWidget(status_widget)
 
+        # === Visualizer Opacity (always visible) ===
+        opacity_row = QHBoxLayout()
+        opacity_row.setContentsMargins(4, 0, 4, 0)
+        opacity_label = QLabel("Opacity:")
+        opacity_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(30, 255)
+        self.opacity_slider.setValue(self.config.indicator_opacity)
+        self.opacity_slider.setFixedWidth(120)
+        self.opacity_value_label = QLabel(str(self.config.indicator_opacity))
+        self.opacity_value_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.opacity_slider.valueChanged.connect(
+            lambda v: self.opacity_value_label.setText(str(v))
+        )
+        opacity_row.addWidget(opacity_label)
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+        opacity_row.addStretch()
+        layout.addLayout(opacity_row)
+
         # === Settings (always visible) ===
         settings_widget = self._build_settings_panel()
         layout.addWidget(settings_widget)
@@ -1026,6 +1046,9 @@ class RecordingWindow(QWidget):
         if hasattr(self, 'timeout_slider'):
             self.config.auto_stop_timeout = self.timeout_slider.value()
 
+        # Visualizer settings
+        self.config.indicator_opacity = self.opacity_slider.value()
+
         # Hotkey setting - apply before saving
         new_hotkey = self._build_hotkey_from_ui()
         if new_hotkey != self.config.hotkey:
@@ -1210,6 +1233,7 @@ class TurboWhisper:
         self.window._on_focus_change = self._on_window_focus_change
         self.window._on_hotkey_changed = self._restart_hotkey_manager
         self.window._on_settings_saved = self._on_settings_saved
+        self.window.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         self._setup_tray()
 
         self.is_recording = False
@@ -1259,6 +1283,7 @@ class TurboWhisper:
         self._floating_indicator = FloatingIndicatorProcess(hotkey_str=hotkey_str)
         self._floating_indicator._on_double_click = self._show_window
         self._floating_indicator._on_right_click = self._show_tray_menu
+        self._floating_indicator._on_left_click = self._close_tray_menu
 
         # Hotkey callback - check if main window is focused before processing
         def hotkey_callback():
@@ -1378,6 +1403,12 @@ class TurboWhisper:
         self.tray.setVisible(True)
         self.window.update_icon(recording=recording)
 
+    def _on_opacity_changed(self, value: int) -> None:
+        """Apply opacity immediately and save to config."""
+        self.window.opacity_value_label.setText(str(value))
+        self.config.indicator_opacity = value
+        self._floating_indicator.set_opacity(value)
+
     def _on_processing_timeout(self) -> None:
         """Watchdog: if processing takes >30s, reset flag to unblock hotkey."""
         if self.is_processing:
@@ -1418,6 +1449,10 @@ class TurboWhisper:
         from PyQt6.QtGui import QCursor
         self._tray_menu.exec(QCursor.pos())
 
+    def _close_tray_menu(self) -> None:
+        """Close the tray context menu (triggered by left-click on visualizer)."""
+        self._tray_menu.close()
+
     def _on_settings_saved(self) -> None:
         """Show notification when settings are saved."""
         self._show_notification("Turbo Whisper", "Settings saved", QSystemTrayIcon.MessageIcon.Information)
@@ -1426,6 +1461,9 @@ class TurboWhisper:
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
         self._floating_indicator.update_hotkey(hotkey_str)
         self._floating_indicator.set_idle()
+
+        # Update visualizer opacity
+        self._floating_indicator.set_opacity(self.config.indicator_opacity)
 
         # Update tray tooltip
         self.tray.setToolTip(f"Turbo Whisper - Press {hotkey_str} to dictate")
@@ -1619,20 +1657,13 @@ class TurboWhisper:
         self.signals.toggle_recording.emit()
 
     def _on_chunk_ready(self, chunk_audio: bytes) -> None:
-        """Called when a silence after speech is detected (streaming mode)."""
+        """Called when a chunk boundary is reached (streaming mode)."""
         if len(chunk_audio) < self.config.min_chunk_bytes:
             return
 
         self._chunk_count += 1
         chunk_seq = self._chunk_count
         logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes")
-
-        # Build context from previous chunks for better recognition
-        context = ""
-        if self._pending_chunk_texts:
-            # Use last ~300 chars of accumulated text as prompt context
-            prev = " ".join(self._pending_chunk_texts)
-            context = prev[-300:]
 
         def transcribe_chunk(_seq=chunk_seq, _session_id=self._streaming_session_id):
             # Add small delay to avoid rate limiting
@@ -1645,7 +1676,10 @@ class TurboWhisper:
             self.signals.show_status.emit(f"Transcribing chunk #{_seq}...")
             self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
-                text = self.client.transcribe_sync(chunk_audio, context=context)
+                # NOTE: no context/prompt param — passing previous text as prompt
+                # causes Whisper to hallucinate it on silence chunks,
+                # leading to exponential duplication.
+                text = self.client.transcribe_sync(chunk_audio)
                 # Store result with sequence number for ordered processing
                 self._chunk_results[_seq] = text
                 # Signal that a chunk is ready for ordered processing
@@ -1810,12 +1844,10 @@ class TurboWhisper:
             except Exception as e:
                 logger.error(f"Final chunk transcription failed: {e}")
 
-        # Disable streaming mode but keep recorder running for visual feedback
+        # Stop the recorder — background mic restart after streaming
+        # was causing a freeze/loop, so it is removed.
         audio_data = self.recorder.stop()
         logger.info(f"_stop_streaming_recording: got {len(audio_data)} bytes, {len(self._pending_chunk_texts)} chunks")
-
-        # Restart background microphone for visual feedback
-        QTimer.singleShot(100, self._restart_background_mic)
 
         # Combine all chunk texts into a full message
         full_text = " ".join(self._pending_chunk_texts).strip()
@@ -2035,6 +2067,8 @@ class TurboWhisper:
             self.hotkey_manager.start()
         # Start floating indicator (always visible)
         self._floating_indicator.start()
+        # Set initial opacity
+        self._floating_indicator.set_opacity(self.config.indicator_opacity)
         # Start background microphone for visual feedback
         self._start_background_mic()
         return self.app.exec()
@@ -2047,18 +2081,6 @@ class TurboWhisper:
             logger.info("Background microphone started")
         except Exception as e:
             logger.error(f"Failed to start background mic: {e}")
-
-    def _restart_background_mic(self) -> None:
-        """Restart background microphone after streaming stops."""
-        if not self.is_recording:
-            try:
-                if not self.recorder.is_recording:
-                    self.recorder.start(level_callback=self._on_audio_level)
-                    self._waveform_timer.start()
-                    logger.info("Background microphone restarted")
-            except Exception as e:
-                logger.error(f"Failed to restart background mic: {e}")
-
 
 _lock_fd = None
 

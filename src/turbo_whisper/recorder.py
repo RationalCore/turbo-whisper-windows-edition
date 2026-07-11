@@ -330,11 +330,12 @@ class AudioRecorder:
     def flush_remaining_chunk(self) -> bytes | None:
         """Flush remaining chunk frames as a final chunk for transcription.
 
-        Prepends the overlap (tail of previous chunk) for continuity.
+        Note: does NOT prepend overlap frames — those were already
+        transcribed as part of the previous chunk and would only cause
+        text duplication in the output.
         """
         if self._streaming_mode and self._chunk_frames:
-            # Prepend overlap frames (tail of last emitted chunk) for continuity
-            chunk_raw = b"".join(self._overlap_frames) + b"".join(self._chunk_frames)
+            chunk_raw = b"".join(self._chunk_frames)
             chunk_audio = self._build_chunk_wav([chunk_raw])
             self._chunk_frames = []
             self._overlap_frames.clear()

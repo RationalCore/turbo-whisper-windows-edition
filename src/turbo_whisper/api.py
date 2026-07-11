@@ -126,13 +126,11 @@ class WhisperClient:
             logger.error(f"Unexpected error: {e}", exc_info=True)
             raise WhisperAPIError(f"Unexpected error: {e}")
 
-    def transcribe_sync(self, audio_data: bytes, context: str = "") -> str:
+    def transcribe_sync(self, audio_data: bytes) -> str:
         """Synchronous version of transcribe with retry on 5xx errors.
 
         Args:
             audio_data: WAV audio data as bytes
-            context: Previous transcription text to use as prompt context
-                     (helps model coherence between chunks in streaming mode).
         """
         headers = self._get_headers()
         audio_size = len(audio_data)
@@ -160,11 +158,6 @@ class WhisperClient:
                             "language": self.config.language,
                             "response_format": "json",
                         }
-                        # Pass previous transcription as prompt context
-                        # (helps Whisper maintain coherence between chunks)
-                        prompt = context.strip()
-                        if prompt:
-                            data["prompt"] = prompt
                         files = {
                             "file": ("audio.wav", audio_data, "audio/wav"),
                         }

@@ -349,6 +349,8 @@ class FloatingIndicatorProcess:
 
         self._on_right_click = None
 
+        self._on_left_click = None
+
         self._hotkey_str = hotkey_str
         self._proc = QProcess()
 
@@ -403,6 +405,10 @@ class FloatingIndicatorProcess:
         """Notify visualizer whether recording is active (green) or idle (grey)."""
         self._send({"type": "recording", "active": active})
 
+    def set_opacity(self, value: int):
+        """Set visualizer window opacity (30-255, 255=opaque)."""
+        self._send({"type": "opacity", "value": value})
+
     def set_idle(self):
         self._send({"type": "idle"})
 
@@ -438,6 +444,8 @@ class FloatingIndicatorProcess:
                     self._on_double_click()
                 elif t == "rightclick" and self._on_right_click:
                     self._on_right_click()
+                elif t == "leftclick" and self._on_left_click:
+                    self._on_left_click()
             except json.JSONDecodeError:
                 pass
 

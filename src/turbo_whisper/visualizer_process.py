@@ -69,6 +69,13 @@ class _IndicatorWindow(QWidget):
         self._bar_values = deque(maxlen=self._num_bars)
         self._scroll_offset = 0.0
         self._is_recording = False
+        self._bg_alpha = 235  # matches default config indicator_opacity
+
+        # Must call setWindowOpacity on Windows to properly initialize a
+        # layered window (WA_TranslucentBackground). Value 1.0 means "no
+        # global multiplier" — transparency is controlled per-pixel in
+        # paintEvent via self._bg_alpha.
+        self.setWindowOpacity(1.0)
 
         self._timer = QTimer()
         self._timer.timeout.connect(self._animate)
@@ -103,6 +110,15 @@ class _IndicatorWindow(QWidget):
     def set_recording(self, active: bool):
         """Switch between recording (green) and idle (grey) color scheme."""
         self._is_recording = active
+
+    def set_opacity(self, value: int):
+        """Set background opacity (30-255, 255=opaque).
+        
+        Only affects the window background/frame. Waveform bars and text
+        remain fully opaque regardless of this setting.
+        """
+        self._bg_alpha = max(30, min(255, value))
+        self.update()
 
     # ── position persistence ─────────────────────────────────────────────
 
@@ -148,7 +164,7 @@ class _IndicatorWindow(QWidget):
 
         self.update()
 
-    # ── drag ──────────────────────────────────────────────────────────────
+    # ── drag + click-to-close ──────────────────────────────────────────
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -166,8 +182,12 @@ class _IndicatorWindow(QWidget):
         if self._is_dragging:
             self._is_dragging = False
             self._drag_pos = None
-            self._save_position()
-            self._restore_previous_focus()
+            # Any left-button release (click or drag) closes the visualizer
+            try:
+                sys.stdout.write('{"type":"leftclick"}\n')
+                sys.stdout.flush()
+            except OSError:
+                pass
             event.accept()
 
     def _get_foreground_window(self):
@@ -210,10 +230,19 @@ class _IndicatorWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self._width, self._height
 
-        bg_color = QColor(15, 15, 25, 180)
+        # 1. Full window background — opacity follows _bg_alpha
+        bg_color = QColor(15, 15, 25, self._bg_alpha)
         painter.setBrush(bg_color)
-        painter.setPen(QPen(QColor(80, 80, 100, 100), 1))
+        painter.setPen(QPen(QColor(80, 80, 100, self._bg_alpha), 1))
         painter.drawRoundedRect(0, 0, w, h, 8, 8)
+
+        # 2. Opaque background under the waveform bars so they stay
+        #    clearly visible at any opacity setting.
+        bars_bg = QColor(15, 15, 25, 255)
+        painter.setBrush(bars_bg)
+        painter.setPen(Qt.PenStyle.NoPen)
+        bars_area_h = 48
+        painter.drawRoundedRect(6, 6, w - 12, bars_area_h, 6, 6)
 
         bars_h = 45
         self._draw_waveform_bars(painter, 8, 8, w - 16, bars_h)
@@ -261,23 +290,23 @@ class _IndicatorWindow(QWidget):
             if self._is_recording:
                 if val > 0.5:
                     color = QColor(132, 204, 22)
-                    alpha = min(200, 100 + int(val * 100))
+                    alpha = 255
                 elif val > 0.2:
                     color = QColor(100, 180, 40)
-                    alpha = 80
+                    alpha = 255
                 else:
                     color = QColor(60, 100, 40)
-                    alpha = 50
+                    alpha = 255
             else:
                 if val > 0.5:
-                    color = QColor(180, 180, 180)
-                    alpha = min(160, 60 + int(val * 80))
+                    color = QColor(255, 255, 255)
+                    alpha = 200
                 elif val > 0.2:
-                    color = QColor(140, 140, 140)
-                    alpha = 60
+                    color = QColor(255, 255, 255)
+                    alpha = 140
                 else:
-                    color = QColor(100, 100, 100)
-                    alpha = 40
+                    color = QColor(255, 255, 255)
+                    alpha = 80
             color.setAlpha(alpha)
             painter.setBrush(color)
             painter.setPen(Qt.PenStyle.NoPen)
@@ -363,6 +392,8 @@ def main():
             window.raise_()
         elif t == "hide":
             window.hide()
+        elif t == "opacity":
+            window.set_opacity(cmd.get("value", 180))
 
     reader.command_received.connect(handle_command)
 

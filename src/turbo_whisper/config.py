@@ -50,6 +50,7 @@ class Config:
     # UI settings
     waveform_color: str = "#84cc16"  # KnowAll.ai lime green
     background_color: str = "#1a1a2e"
+    indicator_opacity: int = 235  # Visualizer window opacity (30-255, 255=opaque, 235 ≈ 92%)
     window_width: int = 520
     window_height: int = 260
 
