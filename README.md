@@ -120,7 +120,7 @@ paru -S turbo-whisper
 sudo apt install python3-pyaudio portaudio19-dev xdotool xclip
 
 # Clone and install
-git clone https://github.com/knowall-ai/turbo-whisper.git
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition
 cd turbo-whisper
 python3 -m venv .venv
 source .venv/bin/activate
@@ -134,7 +134,7 @@ pip install -e .
 
 ```bash
 sudo dnf install python3-pyaudio portaudio-devel xdotool xclip
-git clone https://github.com/knowall-ai/turbo-whisper.git
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition
 cd turbo-whisper
 python3 -m venv .venv
 source .venv/bin/activate
@@ -148,7 +148,7 @@ pip install -e .
 
 ```bash
 sudo pacman -S python-pyaudio portaudio xdotool xclip
-git clone https://github.com/knowall-ai/turbo-whisper.git
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition
 cd turbo-whisper
 python3 -m venv .venv
 source .venv/bin/activate
@@ -164,7 +164,7 @@ pip install -e .
 brew install portaudio
 
 # Clone and install
-git clone https://github.com/knowall-ai/turbo-whisper.git
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition
 cd turbo-whisper
 python3 -m venv .venv
 source .venv/bin/activate
@@ -175,7 +175,7 @@ pip install -e .
 
 ```powershell
 # Clone the repository
-git clone https://github.com/knowall-ai/turbo-whisper.git
+git clone https://github.com/RationalCore/turbo-whisper-windows-edition
 cd turbo-whisper
 
 # Create virtual environment
@@ -196,6 +196,7 @@ pip install pyperclip  # Required for Windows clipboard/typing
 Create `~/.config/turbo-whisper/config.json` (Linux/macOS) or `%APPDATA%\turbo-whisper\config.json` (Windows).  
 For a full list of all available settings with their defaults, see [`config.example.json`](config.example.json) in the project root.
 
+**Single key — tilde (one-press recording):**
 ```json
 {
   "api_url": "https://api.openai.com/v1/audio/transcriptions",
@@ -211,6 +212,27 @@ For a full list of all available settings with their defaults, see [`config.exam
 ```
 
 > **Hotkey `~` (tilde) note:** The hotkey is bound to the physical key code, not to the layout character. On a Russian layout it's `ё`, on English — `` ` `` (backtick) with Shift — `~`, etc. Regardless of the active keyboard layout, the key will be handled correctly.
+>
+> **Double-tap for single-character hotkeys:** When a single character key like `~` is used as the hotkey, a **double-tap** (within 350ms) passes the character through to the active window, allowing you to type the key's character when needed. A single press triggers recording as usual. This behavior is automatic and handles the physical key code — works across keyboard layouts.
+>
+> **Clipboard behavior:** The `copy_to_clipboard: false` setting is now fully respected. When `auto_paste: true` but `copy_to_clipboard: false`, the original clipboard content is saved before paste and **restored** afterwards, so your clipboard remains unchanged after dictation.
+>
+> **Autostart on login:** The `auto_start: true` setting (enabled by default) automatically adds Turbo Whisper to your system's startup programs. Manage it from the Settings panel in the GUI — no manual registry or config file editing required.
+
+**Modifier combination — Ctrl+Shift+Space (to avoid conflicts):**
+```json
+{
+  "api_url": "https://api.openai.com/v1/audio/transcriptions",
+  "api_key": "sk-your-api-key",
+  "hotkey": ["ctrl", "shift", "space"],
+  "language": "en",
+  "auto_paste": true,
+  "copy_to_clipboard": true,
+  "typing_delay_ms": 5,
+  "waveform_color": "#00ff88",
+  "background_color": "#1a1a2e"
+}
+```
 
 ### API Endpoints
 
@@ -448,4 +470,5 @@ Voice dictation Linux, speech to text, STT, voice typing, transcription, transcr
 
 ## Credits
 
-Inspired by [SuperWhisper](https://superwhisper.com/) for macOS.
+Inspired by [SuperWhisper](https://superwhisper.com/) for macOS.  
+Based on the original [Turbo Whisper](https://github.com/knowall-ai/turbo-whisper) by [knowall-ai](https://github.com/knowall-ai).
