@@ -1805,61 +1805,20 @@ class TurboWhisper:
             self._stop_batch_recording()
 
     def _stop_streaming_recording(self) -> None:
-        """Stop streaming recording and save combined message to history."""
-        logger.info("_stop_streaming_recording: starting cleanup")
+        """Stop streaming recording immediately — kill in-flight transcriptions,
+        discard remaining audio, save what was already typed."""
+        logger.info("_stop_streaming_recording: instant stop")
 
-        # CRITICAL: disable streaming in the recorder FIRST so the
-        # recorder thread stops firing more auto-stop / chunk signals
-        # (otherwise dozens of queued toggle_recording signals cause an
-        # infinite start-stop loop after cleanup completes).
+        # Prevent recorder from firing more signals
         self.recorder.disable_streaming()
-
-        # Stop the ordered processing timer
         self._chunk_order_timer.stop()
 
-        # Wait for all in-progress transcriptions to complete (max 10 seconds)
-        wait_start = time.time()
-        while self._chunk_transcription_threads and (time.time() - wait_start) < 10:
-            # Check if any threads are still alive
-            alive_threads = [t for t in self._chunk_transcription_threads if t.is_alive()]
-            if not alive_threads:
-                break
-            logger.info(f"Waiting for {len(alive_threads)} transcription threads to complete...")
-            time.sleep(0.2)
-        logger.info(f"_stop_streaming_recording: thread wait done in {time.time()-wait_start:.1f}s, "
-                    f"{len([t for t in self._chunk_transcription_threads if t.is_alive()])} still alive")
-
-        # Process any remaining chunks in the queue
-        self._process_chunk_queue()
-
-        # Flush any remaining chunk frames before stopping
-        remaining_chunk = self.recorder.flush_remaining_chunk()
-        if remaining_chunk and len(remaining_chunk) >= self.config.min_chunk_bytes:
-            logger.info(f"Processing final chunk: {len(remaining_chunk)} bytes")
-            # Transcribe the final chunk synchronously
-            try:
-                text = self.client.transcribe_sync(remaining_chunk)
-                if text:
-                    # Filter out model artifacts
-                    clean_text = text.strip()
-                    if not _is_hallucination(clean_text) and clean_text:
-                        # Type the final chunk immediately
-                        if self.config.auto_paste:
-                            self.typer.type_text(clean_text)
-                            self._update_insert_time()
-                            # Add space after for separation
-                            self.typer.type_text(" ")
-                        self._pending_chunk_texts.append(clean_text)
-                        logger.info(f"Final chunk transcribed and typed: '{clean_text[:50]}'")
-            except Exception as e:
-                logger.error(f"Final chunk transcription failed: {e}")
-
-        # Stop the recorder — background mic restart after streaming
-        # was causing a freeze/loop, so it is removed.
+        # Stop recorder now — don't wait for threads or flush remaining audio
         audio_data = self.recorder.stop()
-        logger.info(f"_stop_streaming_recording: got {len(audio_data)} bytes, {len(self._pending_chunk_texts)} chunks")
+        logger.info(f"_stop_streaming_recording: recorder stopped, "
+                    f"{len(self._pending_chunk_texts)} chunks already typed")
 
-        # Combine all chunk texts into a full message
+        # Combine whatever chunks were already processed
         full_text = " ".join(self._pending_chunk_texts).strip()
 
         # Save to history if we have text
