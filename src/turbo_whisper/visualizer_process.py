@@ -196,6 +196,15 @@ class _IndicatorWindow(QWidget):
                 pass
             event.accept()
 
+    def contextMenuEvent(self, event):
+        """Notify parent process on right-click (for tray-style menu)."""
+        try:
+            sys.stdout.write('{"type":"rightclick"}\n')
+            sys.stdout.flush()
+        except OSError:
+            pass
+        event.accept()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

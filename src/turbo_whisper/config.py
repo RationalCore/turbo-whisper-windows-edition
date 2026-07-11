@@ -76,7 +76,8 @@ class Config:
 
     # Streaming mode settings
     streaming_mode: bool = False  # Enable chunked streaming transcription
-    silence_threshold_ms: int = 300  # Silence duration to trigger chunk (ms)
+    chunk_duration_seconds: float = 4.0  # Duration of each chunk in time-based mode
+    silence_threshold_ms: int = 300  # Silence duration to trigger chunk (ms) — used for auto-stop
     silence_energy_threshold: float = 0.01  # Energy level below which is "silence"
     min_chunk_bytes: int = 2000  # Minimum chunk size to transcribe
     vad_aggressiveness: int = 1  # webrtcvad aggressiveness (0-3): 0=quality, 1=low bitrate, 2=default, 3=aggressive

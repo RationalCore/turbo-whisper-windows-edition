@@ -102,9 +102,12 @@ class AudioRecorder:
         self._streaming_mode = False
         self._on_chunk_ready: Callable[[bytes], None] | None = None
         self._on_auto_stop: Callable[[], None] | None = None
-        self._silence_detector = None
         self._chunk_frames: list[bytes] = []
-        self._overlap_frames: deque[bytes] = deque(maxlen=10)
+        self._overlap_frames: deque[bytes] = deque(maxlen=32)  # ~1s at 16kHz/chunk_size=1024
+        self._chunk_interval_frames = 0  # frames between chunk emissions
+        self._frames_since_last_chunk = 0
+        self._peak_level = 0.0  # adaptive peak for auto-stop speech detection
+        self._last_speech_frame = 0  # frame counter for auto-stop
 
     def get_input_devices(self) -> list[dict]:
         """Get list of available input devices."""
@@ -146,17 +149,17 @@ class AudioRecorder:
         level_callback=None,
         streaming_mode: bool = False,
         on_chunk_ready: Callable[[bytes], None] | None = None,
-        silence_detector=None,
         on_auto_stop: Callable[[], None] | None = None,
+        chunk_interval_seconds: float = 4.0,
     ) -> None:
         """Start recording audio.
 
         Args:
             level_callback: Called with (level, waveform_buffer) for UI updates
-            streaming_mode: If True, detect silence and call on_chunk_ready
-            on_chunk_ready: Called with WAV bytes when a speech chunk is detected
-            silence_detector: SilenceDetector instance for VAD
+            streaming_mode: If True, emit chunks at fixed time intervals
+            on_chunk_ready: Called with WAV bytes when a chunk is ready
             on_auto_stop: Called when auto-stop timeout reached (no speech detected)
+            chunk_interval_seconds: Duration of each chunk in streaming mode
         """
         if self.is_recording:
             return
@@ -169,9 +172,22 @@ class AudioRecorder:
         self._streaming_mode = streaming_mode
         self._on_chunk_ready = on_chunk_ready
         self._on_auto_stop = on_auto_stop
-        self._silence_detector = silence_detector
         self._chunk_frames = []
-        self._overlap_frames = deque(maxlen=10)
+        self._overlap_frames = deque(maxlen=32)  # ~1s overlap
+        self._frames_since_last_chunk = 0
+        self._peak_level = 0.0
+        self._last_speech_frame = 0
+
+        # Calculate chunk interval in frames
+        if streaming_mode and chunk_interval_seconds > 0:
+            # Each frame is chunk_size / sample_rate seconds
+            frame_duration = self.config.chunk_size / self.config.sample_rate
+            self._chunk_interval_frames = max(1, int(chunk_interval_seconds / frame_duration))
+            logger.info(f"Time-based streaming: {chunk_interval_seconds}s chunks, "
+                      f"{self._chunk_interval_frames} frames each, "
+                      f"~{self._chunk_interval_frames * frame_duration:.1f}s effective")
+        else:
+            self._chunk_interval_frames = 0
 
         # Use simple defaults - let PyAudio/PipeWire handle device routing
         self.stream = self.audio.open(
@@ -194,33 +210,47 @@ class AudioRecorder:
                 self.frames.append(data)
                 frame_count += 1
 
-                # Calculate energy level
+                # Calculate energy level (with mic gain applied)
                 audio_data = np.frombuffer(data, dtype=np.int16)
-                level = np.abs(audio_data).mean() / 32768.0
+                gain_factor = self.config.mic_gain / 100.0
+                level = np.abs(audio_data).mean() / 32768.0 * gain_factor
 
-                if self._streaming_mode and self._silence_detector:
-                    # Streaming mode: accumulate frames and check for silence
+                if self._streaming_mode and self._chunk_interval_frames > 0:
+                    # Time-based streaming: accumulate frames and emit at intervals
                     self._chunk_frames.append(data)
-                    self._overlap_frames.append(data)
 
-                    # Log every 100 frames to see energy levels
-                    if frame_count % 100 == 0:
-                        logger.info(f"Streaming frame={frame_count}: level={level:.6f}, "
-                                  f"threshold={self._silence_detector.energy_threshold}, "
-                                  f"chunk_frames={len(self._chunk_frames)}, "
-                                  f"speech_detected={self._silence_detector._speech_detected}")
+                    # Track peak level for adaptive speech detection (decays slowly)
+                    self._peak_level = max(level, self._peak_level * 0.999)
 
-                    # Pass audio data and energy level to detector
-                    if self._silence_detector.update(data, level):
-                        # Silence after speech detected - send chunk for transcription
+                    # Adaptive threshold: 5% of peak, minimum 0.0001
+                    speech_threshold = max(0.0001, self._peak_level * 0.05)
+
+                    # Check for speech for auto-stop
+                    if level > speech_threshold:
+                        self._last_speech_frame = frame_count
+
+                    # Emit chunk at fixed intervals
+                    if frame_count % self._chunk_interval_frames == 0 and len(self._chunk_frames) > 0:
                         chunk_audio = self._build_chunk_wav(self._chunk_frames)
-                        logger.info(f"SILENCE DETECTED! Chunk ready: {len(chunk_audio)} bytes, "
-                                  f"frames={len(self._chunk_frames)}")
-                        self._chunk_frames = []  # Clear chunk
-                        self._overlap_frames.clear()  # Clear overlap to avoid duplication
+                        # Save tail of this chunk as overlap for next chunk
+                        tail_frames = list(self._chunk_frames)[-self._overlap_frames.maxlen:]
+                        self._overlap_frames = deque(tail_frames, maxlen=self._overlap_frames.maxlen)
+                        # Reset chunk frames
+                        self._chunk_frames = []
+                        self._frames_since_last_chunk = 0
 
-                        if self._on_chunk_ready and len(chunk_audio) > 0:
+                        if self._on_chunk_ready and len(chunk_audio) >= self.config.min_chunk_bytes:
+                            logger.info(f"Time-chunk ready: {len(chunk_audio)} bytes, "
+                                      f"frame={frame_count}")
                             self._on_chunk_ready(chunk_audio)
+
+                    # Auto-stop check: if no speech for auto_stop_timeout seconds
+                    if self.config.auto_stop_timeout > 0 and self._on_auto_stop:
+                        silence_frames = frame_count - self._last_speech_frame
+                        silence_duration = silence_frames * self.config.chunk_size / self.config.sample_rate
+                        if silence_duration >= self.config.auto_stop_timeout:
+                            logger.info(f"Auto-stop: no speech for {silence_duration:.0f}s")
+                            self._on_auto_stop()
 
                 # Always update waveform buffer
                 self.waveform_buffer.append(level)
@@ -242,13 +272,12 @@ class AudioRecorder:
 
         raw_audio = b"".join(frames)
 
-        # Energy-based silence trimming
+        # Energy-based silence trimming (dynamic threshold)
         if self.config.vad_trim_silence:
             try:
                 # Analyze each frame's energy to find speech boundaries
                 chunk_size = self.config.chunk_size  # bytes per frame
-                energy_threshold = 0.005  # Lower = more sensitive (more speech kept)
-                padding_frames = 2  # Keep 2 frames (~60ms) of context
+                padding_frames = 10  # Keep ~640ms context at edges to avoid cutting words
 
                 # Calculate energy for each frame
                 frame_energies = []
@@ -259,18 +288,22 @@ class AudioRecorder:
                         energy = np.abs(audio_samples).mean() / 32768.0
                         frame_energies.append(energy)
                     else:
-                        # Partial frame at end - use lower threshold
+                        # Partial frame at end
                         if frame_data:
                             audio_samples = np.frombuffer(frame_data, dtype=np.int16)
                             energy = np.abs(audio_samples).mean() / 32768.0
                             frame_energies.append(energy)
+
+                # Dynamic threshold: 3% of peak energy (works at any mic level)
+                max_energy = max(frame_energies) if frame_energies else 0
+                energy_threshold = max(0.00005, max_energy * 0.03)
 
                 # Find first and last frame with energy above threshold
                 speech_frames = [i for i, e in enumerate(frame_energies) if e > energy_threshold]
 
                 if speech_frames and len(speech_frames) >= 2:  # At least 2 speech frames
                     first = max(0, speech_frames[0] - padding_frames)
-                    last = min(len(frames), speech_frames[-1] + 1 + padding_frames)
+                    last = min(len(frame_energies), speech_frames[-1] + 1 + padding_frames)
 
                     # Calculate byte positions
                     first_byte = first * chunk_size
@@ -297,12 +330,12 @@ class AudioRecorder:
     def flush_remaining_chunk(self) -> bytes | None:
         """Flush remaining chunk frames as a final chunk for transcription.
 
-        Returns:
-            WAV bytes if there are remaining frames, None otherwise
+        Prepends the overlap (tail of previous chunk) for continuity.
         """
         if self._streaming_mode and self._chunk_frames:
-            # Only use remaining chunk frames, not overlap
-            chunk_audio = self._build_chunk_wav(self._chunk_frames)
+            # Prepend overlap frames (tail of last emitted chunk) for continuity
+            chunk_raw = b"".join(self._overlap_frames) + b"".join(self._chunk_frames)
+            chunk_audio = self._build_chunk_wav([chunk_raw])
             self._chunk_frames = []
             self._overlap_frames.clear()
             if len(chunk_audio) > 0:
@@ -318,7 +351,7 @@ class AudioRecorder:
         """
         self._streaming_mode = False
         self._on_chunk_ready = None
-        self._silence_detector = None
+        self._chunk_interval_frames = 0
         logger.info("Streaming mode disabled (recorder still running)")
 
     def stop(self) -> bytes:

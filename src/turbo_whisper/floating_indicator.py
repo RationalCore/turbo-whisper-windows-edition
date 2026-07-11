@@ -347,6 +347,8 @@ class FloatingIndicatorProcess:
 
         self._on_double_click = None
 
+        self._on_right_click = None
+
         self._hotkey_str = hotkey_str
         self._proc = QProcess()
 
@@ -423,7 +425,7 @@ class FloatingIndicatorProcess:
             logger.info("[visualizer] %s", data.strip())
 
     def _read_stdout(self):
-        """Read stdout from the child (for double-click events)."""
+        """Read stdout from the child (for double-click and right-click events)."""
         data = self._proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
         for line in data.split("\n"):
             line = line.strip()
@@ -431,8 +433,11 @@ class FloatingIndicatorProcess:
                 continue
             try:
                 cmd = json.loads(line)
-                if cmd.get("type") == "doubleclick" and self._on_double_click:
+                t = cmd.get("type")
+                if t == "doubleclick" and self._on_double_click:
                     self._on_double_click()
+                elif t == "rightclick" and self._on_right_click:
+                    self._on_right_click()
             except json.JSONDecodeError:
                 pass
 

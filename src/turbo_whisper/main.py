@@ -11,6 +11,10 @@ import time
 from pathlib import Path
 
 
+# Punctuation to strip from hallucination text/pattern edges
+_PUNCTUATION_TRIM = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~…—–«» "
+
+
 def _load_hallucination_patterns() -> list[str]:
     """Load hallucination filter patterns from JSON file."""
     patterns = []
@@ -80,18 +84,24 @@ _HALLUCINATION_PATTERNS = _load_hallucination_patterns()
 def _is_hallucination(text: str) -> bool:
     """Check if text is a hallucination/artifact from the speech model.
 
-    Uses exact match for most patterns, except 'субтитр' which uses substring.
+    Strips trailing punctuation before comparing so that e.g.
+    'Продолжение следует.' matches the pattern 'Продолжение следует...'
+    Also filters very short texts (1 word or very short) that are usually hallucinated.
     """
-    text_stripped = text.strip()
+    text_stripped = text.strip(_PUNCTUATION_TRIM)
     text_lower = text_stripped.lower()
+
+    # Filter single words shorter than 5 chars (usually noise artifacts)
+    if len(text_stripped) < 5 and " " not in text_stripped:
+        return True
 
     # Special case: substring check for 'субтитр' derivatives
     if "субтитр" in text_lower:
         return True
 
-    # All other patterns: exact match (case-insensitive)
+    # All other patterns: exact match (case-insensitive), trimmed same way
     for pattern in _HALLUCINATION_PATTERNS:
-        if pattern.lower() == text_lower:
+        if pattern.strip(_PUNCTUATION_TRIM).lower() == text_lower:
             return True
 
     return False
@@ -1216,6 +1226,7 @@ class TurboWhisper:
         self._pending_chunk_texts = []  # Accumulate chunk texts for full message
         self._chunk_count = 0
         self._current_session_text = ""  # Full text for current recording session
+        self._streaming_session_id = 0  # Incremented each recording to discard stale chunks
 
         # Ordered chunk processing queue
         import queue
@@ -1247,6 +1258,7 @@ class TurboWhisper:
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
         self._floating_indicator = FloatingIndicatorProcess(hotkey_str=hotkey_str)
         self._floating_indicator._on_double_click = self._show_window
+        self._floating_indicator._on_right_click = self._show_tray_menu
 
         # Hotkey callback - check if main window is focused before processing
         def hotkey_callback():
@@ -1333,6 +1345,7 @@ class TurboWhisper:
         menu.addAction(quit_action)
 
         self.tray.setContextMenu(menu)
+        self._tray_menu = menu
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
@@ -1399,6 +1412,11 @@ class TurboWhisper:
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
+
+    def _show_tray_menu(self) -> None:
+        """Show the tray context menu at cursor position (from visualizer right-click)."""
+        from PyQt6.QtGui import QCursor
+        self._tray_menu.exec(QCursor.pos())
 
     def _on_settings_saved(self) -> None:
         """Show notification when settings are saved."""
@@ -1547,11 +1565,9 @@ class TurboWhisper:
                 self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
 
     def _start_streaming_recording(self) -> None:
-        """Start recording in streaming mode with VAD."""
-        from turbo_whisper.silence import SilenceDetector
-
-        logger.info(f"Starting streaming mode: silence_threshold={self.config.silence_threshold_ms}ms, "
-                   f"energy_threshold={self.config.silence_energy_threshold}")
+        """Start recording in streaming mode with time-based chunking."""
+        logger.info(f"Starting streaming mode: chunk_duration={self.config.chunk_duration_seconds}s, "
+                   f"auto_stop={self.config.auto_stop_timeout}s")
 
         # Stop background mic first if running
         if self.recorder.is_recording:
@@ -1559,13 +1575,8 @@ class TurboWhisper:
             self.recorder.stop()
             time.sleep(0.1)  # Small delay to ensure clean stop
 
-        self._silence_detector = SilenceDetector(
-            silence_threshold_ms=self.config.silence_threshold_ms,
-            energy_threshold=self.config.silence_energy_threshold,
-            aggressiveness=self.config.vad_aggressiveness,
-            max_silence_ms=self.config.auto_stop_timeout * 1000,
-        )
         self._chunk_count = 0
+        self._streaming_session_id += 1
 
         # Reset ordered chunk processing state
         self._next_chunk_to_type = 1
@@ -1584,8 +1595,8 @@ class TurboWhisper:
                 level_callback=self._on_audio_level,
                 streaming_mode=True,
                 on_chunk_ready=self._on_chunk_ready,
-                silence_detector=self._silence_detector,
                 on_auto_stop=self._on_auto_stop,
+                chunk_interval_seconds=self.config.chunk_duration_seconds,
             )
             logger.info("Streaming recording started successfully")
             # Show floating indicator
@@ -1623,22 +1634,26 @@ class TurboWhisper:
             prev = " ".join(self._pending_chunk_texts)
             context = prev[-300:]
 
-        def transcribe_chunk():
+        def transcribe_chunk(_seq=chunk_seq, _session_id=self._streaming_session_id):
             # Add small delay to avoid rate limiting
             time.sleep(0.5)
+            # Discard if a new recording session started while we were waiting
+            if _session_id != self._streaming_session_id:
+                logger.debug(f"Chunk #{_seq} discarded (stale session)")
+                return
             # Update status only when actually sending to API
-            self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
+            self.signals.show_status.emit(f"Transcribing chunk #{_seq}...")
             self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
                 text = self.client.transcribe_sync(chunk_audio, context=context)
                 # Store result with sequence number for ordered processing
-                self._chunk_results[chunk_seq] = text
+                self._chunk_results[_seq] = text
                 # Signal that a chunk is ready for ordered processing
-                self._chunk_queue.put(chunk_seq)
+                self._chunk_queue.put(_seq)
             except Exception as e:
-                logger.error(f"Chunk #{chunk_seq} transcription failed: {e}")
-                self._chunk_results[chunk_seq] = None
-                self._chunk_queue.put(chunk_seq)
+                logger.error(f"Chunk #{_seq} transcription failed: {e}")
+                self._chunk_results[_seq] = None
+                self._chunk_queue.put(_seq)
 
         thread = threading.Thread(target=transcribe_chunk, daemon=True)
         thread.start()
