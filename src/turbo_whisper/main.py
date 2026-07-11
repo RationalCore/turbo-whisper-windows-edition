@@ -136,7 +136,7 @@ from turbo_whisper.icons import (
 )
 from turbo_whisper.recorder import AudioRecorder
 from turbo_whisper.typer import Typer
-from turbo_whisper.floating_indicator import FloatingIndicator
+from turbo_whisper.floating_indicator import FloatingIndicatorProcess
 
 
 def _setup_logger() -> logging.Logger:
@@ -1243,9 +1243,9 @@ class TurboWhisper:
         self._auto_stop_timer.setInterval(1000)  # Check every second
         self._last_insert_time = 0.0
 
-        # Floating indicator - always visible
+        # Floating indicator - always visible (runs in a separate process)
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        self._floating_indicator = FloatingIndicator(hotkey_str=hotkey_str)
+        self._floating_indicator = FloatingIndicatorProcess(hotkey_str=hotkey_str)
         self._floating_indicator._on_double_click = self._show_window
 
         # Hotkey callback - check if main window is focused before processing
@@ -1406,7 +1406,7 @@ class TurboWhisper:
 
         # Update floating indicator hotkey
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        self._floating_indicator._hotkey_str = hotkey_str
+        self._floating_indicator.update_hotkey(hotkey_str)
         self._floating_indicator.set_idle()
 
         # Update tray tooltip
@@ -1503,6 +1503,7 @@ class TurboWhisper:
 
         # Update floating indicator
         self._floating_indicator.set_status("Recording...", "#ef4444")
+        self._floating_indicator.set_recording(True)
 
         # Reset auto-stop timer (tracking time since last insert)
         self._last_insert_time = time.time()
@@ -1615,6 +1616,13 @@ class TurboWhisper:
         chunk_seq = self._chunk_count
         logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes")
 
+        # Build context from previous chunks for better recognition
+        context = ""
+        if self._pending_chunk_texts:
+            # Use last ~300 chars of accumulated text as prompt context
+            prev = " ".join(self._pending_chunk_texts)
+            context = prev[-300:]
+
         def transcribe_chunk():
             # Add small delay to avoid rate limiting
             time.sleep(0.5)
@@ -1622,7 +1630,7 @@ class TurboWhisper:
             self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
             self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
-                text = self.client.transcribe_sync(chunk_audio)
+                text = self.client.transcribe_sync(chunk_audio, context=context)
                 # Store result with sequence number for ordered processing
                 self._chunk_results[chunk_seq] = text
                 # Signal that a chunk is ready for ordered processing
@@ -1713,6 +1721,7 @@ class TurboWhisper:
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
+        self._floating_indicator.set_recording(False)
         if hasattr(self, '_chunk_order_timer'):
             self._chunk_order_timer.stop()
         self.recorder.stop()
@@ -1735,6 +1744,7 @@ class TurboWhisper:
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
+        self._floating_indicator.set_recording(False)
 
         if self.config.streaming_mode:
             # Streaming mode: combine chunks into full message
@@ -2001,6 +2011,8 @@ class TurboWhisper:
             self.recorder.cleanup()
         except Exception:
             pass
+        # Shut down visualizer process
+        self._floating_indicator._kill()
         self.app.quit()
 
     def run(self) -> int:

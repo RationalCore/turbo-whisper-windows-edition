@@ -1,13 +1,15 @@
 """Floating audio indicator widget - persistent overlay with waveform bars and status."""
 
+import atexit
 import json
 import logging
 import math
 import os
+import sys
 from collections import deque
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QProcess
 from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QLinearGradient
 from PyQt6.QtWidgets import QWidget
 
@@ -318,3 +320,134 @@ class FloatingIndicator(QWidget):
                 QRectF(bar_x, bar_y_top, bar_width, bar_height),
                 2, 2
             )
+
+
+class FloatingIndicatorProcess:
+    """Drop-in replacement for FloatingIndicator that runs in a subprocess.
+
+    Launches visualizer_process.py via QProcess. The child process owns
+    its own QApplication + QWidget and renders the waveform without any
+    blocking from the main application thread.
+
+    Set _on_double_click to a callable to handle double-click events.
+    """
+
+    _instance = None  # keep a strong ref so QProcess doesn't get GC'd
+
+    def __new__(cls, *args, **kwargs):
+        inst = super().__new__(cls)
+        cls._instance = inst
+        return inst
+
+    def __init__(self, hotkey_str: str = "F8"):
+        # Prevent re-init on the same instance
+        if getattr(self, "_started", False):
+            return
+        self._started = True
+
+        self._on_double_click = None
+
+        self._hotkey_str = hotkey_str
+        self._proc = QProcess()
+
+        # Route stderr of the child to our logging
+        self._proc.readyReadStandardError.connect(self._read_stderr)
+        # Route stdout for double-click signals from the child
+        self._proc.readyReadStandardOutput.connect(self._read_stdout)
+        self._proc.finished.connect(self._on_finished)
+
+        # Keep stdin pipe open, forward stderr, capture stdout
+        self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+
+        atexit.register(self._kill)
+
+    # ── public API (mirrors FloatingIndicator) ────────────────────────────
+
+    def start(self):
+        """Launch the visualizer subprocess."""
+        if self._proc.state() != QProcess.ProcessState.NotRunning:
+            return  # already running
+
+        # Locate the visualizer_process.py module
+        module_dir = Path(__file__).parent
+        script = module_dir / "visualizer_process.py"
+        if not script.exists():
+            logger.error("visualizer_process.py not found at %s", script)
+            return
+
+        python = sys.executable
+        self._proc.start(python, [str(script), self._hotkey_str])
+        if not self._proc.waitForStarted(3000):
+            logger.error("Visualizer process failed to start")
+            return
+
+        logger.info("Visualizer process started (pid=%d)", self._proc.processId())
+
+    def stop(self):
+        self._send({"type": "hide"})
+
+    def update_level(self, level: float):
+        self._send({"type": "level", "value": level})
+
+    def set_status(self, text: str, color: str = "#84cc16", sub_text: str = ""):
+        self._send({"type": "status", "text": text, "color": color, "sub_text": sub_text})
+
+    def update_hotkey(self, hotkey_str: str):
+        """Update hotkey string in the visualizer process."""
+        self._hotkey_str = hotkey_str
+        self._send({"type": "hotkey", "text": hotkey_str})
+
+    def set_recording(self, active: bool):
+        """Notify visualizer whether recording is active (green) or idle (grey)."""
+        self._send({"type": "recording", "active": active})
+
+    def set_idle(self):
+        self._send({"type": "idle"})
+
+    # ── internal helpers ──────────────────────────────────────────────────
+
+    def _send(self, cmd: dict):
+        """Write one JSON line to the child's stdin."""
+        proc = self._proc
+        if proc.state() != QProcess.ProcessState.Running:
+            return
+        try:
+            line = json.dumps(cmd, ensure_ascii=False) + "\n"
+            proc.write(line.encode("utf-8"))
+        except Exception as e:
+            logger.debug("Visualizer send error: %s", e)
+
+    def _read_stderr(self):
+        data = self._proc.readAllStandardError().data().decode("utf-8", errors="replace")
+        if data.strip():
+            logger.info("[visualizer] %s", data.strip())
+
+    def _read_stdout(self):
+        """Read stdout from the child (for double-click events)."""
+        data = self._proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
+        for line in data.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cmd = json.loads(line)
+                if cmd.get("type") == "doubleclick" and self._on_double_click:
+                    self._on_double_click()
+            except json.JSONDecodeError:
+                pass
+
+    def _on_finished(self, exit_code, exit_status):
+        logger.info("Visualizer process exited (code=%d, status=%s)", exit_code, exit_status)
+        FloatingIndicatorProcess._instance = None
+
+    def _kill(self):
+        """Terminate the subprocess on shutdown."""
+        try:
+            if self._proc.state() == QProcess.ProcessState.Running:
+                self._send({"type": "exit"})
+                if not self._proc.waitForFinished(2000):
+                    logger.warning("Visualizer process did not exit gracefully, terminating")
+                    self._proc.kill()
+                    self._proc.waitForFinished(1000)
+        except Exception:
+            pass
