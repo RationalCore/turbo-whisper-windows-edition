@@ -1790,6 +1790,10 @@ class TurboWhisper:
         if not self.is_recording:
             print("_stop_recording: not recording, returning")
             return
+
+        # Show stopping indicator immediately
+        self._floating_indicator.set_status("Stopping...", "#f59e0b")
+
         self.is_recording = False
         self.toggle_action.setText("Start Recording")
         self._update_icons(recording=False)
