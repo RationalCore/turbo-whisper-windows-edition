@@ -101,6 +101,7 @@ class AudioRecorder:
         # Streaming mode state
         self._streaming_mode = False
         self._on_chunk_ready: Callable[[bytes], None] | None = None
+        self._on_auto_stop: Callable[[], None] | None = None
         self._silence_detector = None
         self._chunk_frames: list[bytes] = []
         self._overlap_frames: deque[bytes] = deque(maxlen=10)
@@ -146,6 +147,7 @@ class AudioRecorder:
         streaming_mode: bool = False,
         on_chunk_ready: Callable[[bytes], None] | None = None,
         silence_detector=None,
+        on_auto_stop: Callable[[], None] | None = None,
     ) -> None:
         """Start recording audio.
 
@@ -154,6 +156,7 @@ class AudioRecorder:
             streaming_mode: If True, detect silence and call on_chunk_ready
             on_chunk_ready: Called with WAV bytes when a speech chunk is detected
             silence_detector: SilenceDetector instance for VAD
+            on_auto_stop: Called when auto-stop timeout reached (no speech detected)
         """
         if self.is_recording:
             return
@@ -165,6 +168,7 @@ class AudioRecorder:
         # Streaming mode state
         self._streaming_mode = streaming_mode
         self._on_chunk_ready = on_chunk_ready
+        self._on_auto_stop = on_auto_stop
         self._silence_detector = silence_detector
         self._chunk_frames = []
         self._overlap_frames = deque(maxlen=10)
@@ -228,15 +232,66 @@ class AudioRecorder:
                 break
 
     def _build_chunk_wav(self, frames: list[bytes]) -> bytes:
-        """Convert frames to WAV bytes for chunk transcription."""
+        """Convert frames to WAV bytes for chunk transcription.
+
+        If VAD trim is enabled, removes leading and trailing silence
+        using frame energy levels (simple and predictable).
+        """
         if not frames:
             return b""
+
+        raw_audio = b"".join(frames)
+
+        # Energy-based silence trimming
+        if self.config.vad_trim_silence:
+            try:
+                # Analyze each frame's energy to find speech boundaries
+                chunk_size = self.config.chunk_size  # bytes per frame
+                energy_threshold = 0.005  # Lower = more sensitive (more speech kept)
+                padding_frames = 2  # Keep 2 frames (~60ms) of context
+
+                # Calculate energy for each frame
+                frame_energies = []
+                for i in range(0, len(raw_audio), chunk_size):
+                    frame_data = raw_audio[i:i + chunk_size]
+                    if len(frame_data) >= chunk_size:
+                        audio_samples = np.frombuffer(frame_data, dtype=np.int16)
+                        energy = np.abs(audio_samples).mean() / 32768.0
+                        frame_energies.append(energy)
+                    else:
+                        # Partial frame at end - use lower threshold
+                        if frame_data:
+                            audio_samples = np.frombuffer(frame_data, dtype=np.int16)
+                            energy = np.abs(audio_samples).mean() / 32768.0
+                            frame_energies.append(energy)
+
+                # Find first and last frame with energy above threshold
+                speech_frames = [i for i, e in enumerate(frame_energies) if e > energy_threshold]
+
+                if speech_frames and len(speech_frames) >= 2:  # At least 2 speech frames
+                    first = max(0, speech_frames[0] - padding_frames)
+                    last = min(len(frames), speech_frames[-1] + 1 + padding_frames)
+
+                    # Calculate byte positions
+                    first_byte = first * chunk_size
+                    last_byte = last * chunk_size
+
+                    trimmed = raw_audio[first_byte:last_byte]
+                    saved = len(raw_audio) - len(trimmed)
+                    if saved > chunk_size * 2:  # Only log if we saved meaningful silence
+                        logger.info(f"Energy trim: {len(raw_audio)} -> {len(trimmed)} bytes "
+                                  f"({saved} bytes silence removed, "
+                                  f"{len(speech_frames)}/{len(frame_energies)} frames with speech)")
+                        raw_audio = trimmed
+            except Exception as e:
+                logger.error(f"Energy trim error: {e}")
+
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wf:
             wf.setnchannels(self.config.channels)
             wf.setsampwidth(2)
             wf.setframerate(self._actual_sample_rate)
-            wf.writeframes(b"".join(frames))
+            wf.writeframes(raw_audio)
         return wav_buffer.getvalue()
 
     def flush_remaining_chunk(self) -> bytes | None:

@@ -20,6 +20,7 @@ class SilenceDetector:
         energy_threshold: float = 0.01,
         chunk_duration_ms: int = 30,
         aggressiveness: int = 1,
+        max_silence_ms: int = 10000,  # 10 seconds without any speech = auto-stop
     ):
         """Initialize silence detector with webrtcvad.
 
@@ -30,11 +31,13 @@ class SilenceDetector:
             chunk_duration_ms: Duration of each audio chunk from PyAudio
             aggressiveness: VAD aggressiveness (0-3), higher = more aggressive filtering
                           0=quality, 1=low bitrate, 2=default, 3=aggressive
+            max_silence_ms: Max silence (ms) before first speech before auto-stop
         """
         self.silence_threshold_ms = silence_threshold_ms
         self.min_speech_ms = min_speech_ms
         self.energy_threshold = energy_threshold
         self.chunk_duration_ms = chunk_duration_ms
+        self.max_silence_ms = max_silence_ms
         self.sample_rate = 16000  # webrtcvad requires 8000, 16000, 32000, or 48000
 
         # Frame size for webrtcvad (10ms, 20ms, or 30ms)
@@ -62,6 +65,9 @@ class SilenceDetector:
         self._speech_frames = 0
         self._speech_detected = False
         self._in_speech = False
+        # Total silence since chunk start (for auto-stop)
+        self._total_silence_since_speech = 0
+        self._max_silence_frames = max_silence_ms // chunk_duration_ms
 
         # Buffer for incomplete frames
         self._frame_buffer = b""
@@ -78,10 +84,25 @@ class SilenceDetector:
         """
         # Use webrtcvad if available
         if self._use_webrtcvad and self._vad:
-            return self._update_webrtcvad(audio_data)
+            result = self._update_webrtcvad(audio_data)
         else:
-            # Fallback to energy-based detection
-            return self._update_energy(energy_level)
+            result = self._update_energy(energy_level)
+
+        # Track total silence for auto-stop
+        if not self._speech_detected and not self._in_speech:
+            self._total_silence_since_speech += 1
+
+        return result
+
+    @property
+    def is_timeout(self) -> bool:
+        """Check if auto-stop timeout has been reached (no speech detected for too long)."""
+        if self._max_silence_frames <= 0:
+            return False
+        return (
+            not self._speech_detected
+            and self._total_silence_since_speech >= self._max_silence_frames
+        )
 
     def _update_webrtcvad(self, audio_data: bytes) -> bool:
         """Update using webrtcvad for accurate speech detection."""
@@ -165,8 +186,27 @@ class SilenceDetector:
         self._speech_detected = False
         self._in_speech = False
         self._frame_buffer = b""
+        self._total_silence_since_speech = 0
 
     def update_threshold(self, silence_threshold_ms: int):
         """Update the silence threshold dynamically."""
         self.silence_threshold_ms = silence_threshold_ms
         self._threshold_frames = max(1, silence_threshold_ms // self.chunk_duration_ms)
+
+    def is_frame_speech(self, frame: bytes) -> bool:
+        """Check if a single frame contains speech using webrtcvad.
+
+        Args:
+            frame: Raw PCM audio frame (16-bit, 16kHz, mono)
+
+        Returns:
+            True if the frame contains speech, False otherwise
+        """
+        if self._use_webrtcvad and self._vad and len(frame) >= self.frame_size * 2:
+            # Use only one frame duration for VAD
+            vad_frame = frame[:self.frame_size * 2]
+            try:
+                return self._vad.is_speech(vad_frame, self.sample_rate)
+            except Exception:
+                pass
+        return False

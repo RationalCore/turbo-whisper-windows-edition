@@ -31,6 +31,9 @@ def _load_hallucination_patterns() -> list[str]:
     # Also add substring checks for "субтитры" derivatives
     patterns.append("субтитр")
 
+    # Filter out single-letter patterns (useless for exact match)
+    patterns = [p for p in patterns if len(p.strip()) > 2 or p.strip() == "субтитр"]
+
     # Additional Russian-specific hallucination patterns
     ru_patterns = [
         "ВЕСЕЛАЯ МУЗЫКА", "СПОКОЙНАЯ МУЗЫКА", "ГРУСТНАЯ МЕЛОДИЯ",
@@ -75,12 +78,22 @@ _HALLUCINATION_PATTERNS = _load_hallucination_patterns()
 
 
 def _is_hallucination(text: str) -> bool:
-    """Check if text is a hallucination/artifact from the speech model."""
-    text_lower = text.lower()
+    """Check if text is a hallucination/artifact from the speech model.
+
+    Uses exact match for most patterns, except 'субтитр' which uses substring.
+    """
+    text_stripped = text.strip()
+    text_lower = text_stripped.lower()
+
+    # Special case: substring check for 'субтитр' derivatives
+    if "субтитр" in text_lower:
+        return True
+
+    # All other patterns: exact match (case-insensitive)
     for pattern in _HALLUCINATION_PATTERNS:
-        pattern_lower = pattern.lower()
-        if pattern_lower in text_lower:
+        if pattern.lower() == text_lower:
             return True
+
     return False
 
 # Platform-specific imports for single-instance locking
@@ -599,6 +612,34 @@ class RecordingWindow(QWidget):
         vad_row.addWidget(self.vad_value_label)
         s.addLayout(vad_row)
 
+        # VAD trim silence
+        self.vad_trim_cb = QCheckBox("Remove silence from chunks (VAD trim)")
+        self.vad_trim_cb.setChecked(self.config.vad_trim_silence)
+        self.vad_trim_cb.setToolTip(
+            "When enabled, leading and trailing silence is removed from\n"
+            "audio chunks before sending to API.\n"
+            "Reduces API costs and improves transcription accuracy."
+        )
+        s.addWidget(self.vad_trim_cb)
+
+        # Auto-stop timeout (listen mode timeout)
+        timeout_row = QHBoxLayout()
+        self.timeout_label = QLabel("Stop after silence:")
+        self.timeout_slider = QSlider(Qt.Orientation.Horizontal)
+        self.timeout_slider.setRange(0, 30)
+        self.timeout_slider.setValue(self.config.auto_stop_timeout)
+        self.timeout_slider.setSingleStep(1)
+        self.timeout_slider.setPageStep(5)
+        self.timeout_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.timeout_slider.setTickInterval(5)
+        self.timeout_slider.valueChanged.connect(self._on_timeout_changed)
+        self.timeout_value_label = QLabel(self._get_timeout_description(self.config.auto_stop_timeout))
+        self.timeout_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        timeout_row.addWidget(self.timeout_label)
+        timeout_row.addWidget(self.timeout_slider)
+        timeout_row.addWidget(self.timeout_value_label)
+        s.addLayout(timeout_row)
+
         # Update visibility based on current streaming mode
         self._update_streaming_ui_visibility()
 
@@ -655,6 +696,7 @@ class RecordingWindow(QWidget):
             self.vad_slider.setVisible(is_streaming)
         if hasattr(self, 'vad_value_label'):
             self.vad_value_label.setVisible(is_streaming)
+        # Auto-stop timeout is always visible
 
     def _on_silence_threshold_changed(self, value: int) -> None:
         """Update silence threshold display."""
@@ -675,6 +717,17 @@ class RecordingWindow(QWidget):
             3: "Aggressive (may miss quiet speech)"
         }
         return descriptions.get(value, f"Mode {value}")
+
+    def _get_timeout_description(self, value: int) -> str:
+        """Get human-readable description for auto-stop timeout value."""
+        if value <= 0:
+            return "Off"
+        return f"{value}s"
+
+    def _on_timeout_changed(self, value: int) -> None:
+        """Update auto-stop timeout display."""
+        if hasattr(self, 'timeout_value_label'):
+            self.timeout_value_label.setText(self._get_timeout_description(value))
 
     def _update_hotkey_display(self) -> None:
         """Update hotkey display from current config."""
@@ -958,6 +1011,10 @@ class RecordingWindow(QWidget):
         self.config.streaming_mode = self.streaming_cb.isChecked()
         self.config.silence_threshold_ms = self.silence_slider.value()
         self.config.vad_aggressiveness = self.vad_slider.value()
+        if hasattr(self, 'vad_trim_cb'):
+            self.config.vad_trim_silence = self.vad_trim_cb.isChecked()
+        if hasattr(self, 'timeout_slider'):
+            self.config.auto_stop_timeout = self.timeout_slider.value()
 
         # Hotkey setting - apply before saving
         new_hotkey = self._build_hotkey_from_ui()
@@ -1179,6 +1236,12 @@ class TurboWhisper:
         self._waveform_timer = QTimer()
         self._waveform_timer.timeout.connect(self._poll_waveform_data)
         self._waveform_timer.setInterval(30)
+
+        # Auto-stop timer (checks if no text was inserted for too long)
+        self._auto_stop_timer = QTimer()
+        self._auto_stop_timer.timeout.connect(self._check_auto_stop)
+        self._auto_stop_timer.setInterval(1000)  # Check every second
+        self._last_insert_time = 0.0
 
         # Floating indicator - always visible
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
@@ -1441,6 +1504,9 @@ class TurboWhisper:
         # Update floating indicator
         self._floating_indicator.set_status("Recording...", "#ef4444")
 
+        # Reset auto-stop timer (tracking time since last insert)
+        self._last_insert_time = time.time()
+
         # Capture the foreground window handle BEFORE recording starts
         # This ensures we paste into the correct window after recording
         if sys.platform == "win32":
@@ -1461,6 +1527,7 @@ class TurboWhisper:
 
         self._pending_waveform_data = None
         self._waveform_timer.start()
+        self._auto_stop_timer.start()  # Start auto-stop timer
 
         if self.config.streaming_mode:
             # Streaming mode: show window and use VAD
@@ -1495,6 +1562,7 @@ class TurboWhisper:
             silence_threshold_ms=self.config.silence_threshold_ms,
             energy_threshold=self.config.silence_energy_threshold,
             aggressiveness=self.config.vad_aggressiveness,
+            max_silence_ms=self.config.auto_stop_timeout * 1000,
         )
         self._chunk_count = 0
 
@@ -1516,6 +1584,7 @@ class TurboWhisper:
                 streaming_mode=True,
                 on_chunk_ready=self._on_chunk_ready,
                 silence_detector=self._silence_detector,
+                on_auto_stop=self._on_auto_stop,
             )
             logger.info("Streaming recording started successfully")
             # Show floating indicator
@@ -1531,6 +1600,12 @@ class TurboWhisper:
             self.window.hide()
             self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
 
+    def _on_auto_stop(self) -> None:
+        """Called when auto-stop timeout is reached (no speech detected)."""
+        logger.info("Auto-stop triggered - stopping recording")
+        # Use signals to toggle recording from main thread
+        self.signals.toggle_recording.emit()
+
     def _on_chunk_ready(self, chunk_audio: bytes) -> None:
         """Called when a silence after speech is detected (streaming mode)."""
         if len(chunk_audio) < self.config.min_chunk_bytes:
@@ -1540,13 +1615,12 @@ class TurboWhisper:
         chunk_seq = self._chunk_count
         logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes")
 
-        # Update window and floating indicator status
-        self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
-        self._floating_indicator.set_status("Transcribing...", "#f59e0b")
-
         def transcribe_chunk():
             # Add small delay to avoid rate limiting
             time.sleep(0.5)
+            # Update status only when actually sending to API
+            self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
+            self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
                 text = self.client.transcribe_sync(chunk_audio)
                 # Store result with sequence number for ordered processing
@@ -1561,6 +1635,21 @@ class TurboWhisper:
         thread = threading.Thread(target=transcribe_chunk, daemon=True)
         thread.start()
         self._chunk_transcription_threads.append(thread)
+
+    def _update_insert_time(self) -> None:
+        """Update the last insert time (called after successful text insert)."""
+        self._last_insert_time = time.time()
+
+    def _check_auto_stop(self) -> None:
+        """Check if auto-stop should trigger (no text was inserted for too long)."""
+        timeout = self.config.auto_stop_timeout
+        if timeout <= 0 or not self.is_recording:
+            return
+
+        elapsed = time.time() - self._last_insert_time
+        if elapsed >= timeout:
+            logger.info(f"Auto-stop: no text inserted for {elapsed:.0f}s (timeout={timeout}s)")
+            self._stop_recording()
 
     def _on_chunk_transcription_complete(self, text: str) -> None:
         """Called when a chunk transcription completes (streaming mode).
@@ -1603,6 +1692,7 @@ class TurboWhisper:
             # Type the chunk text, then add space after
             if self.config.auto_paste:
                 self.typer.type_text(text)
+                self._update_insert_time()
                 # Add space after chunk for separation
                 self.typer.type_text(" ")
 
@@ -1622,6 +1712,7 @@ class TurboWhisper:
         self.toggle_action.setText("Start Recording")
         self._update_icons(recording=False)
         self._waveform_timer.stop()
+        self._auto_stop_timer.stop()
         if hasattr(self, '_chunk_order_timer'):
             self._chunk_order_timer.stop()
         self.recorder.stop()
@@ -1643,6 +1734,7 @@ class TurboWhisper:
         self.toggle_action.setText("Start Recording")
         self._update_icons(recording=False)
         self._waveform_timer.stop()
+        self._auto_stop_timer.stop()
 
         if self.config.streaming_mode:
             # Streaming mode: combine chunks into full message
@@ -1685,6 +1777,7 @@ class TurboWhisper:
                         # Type the final chunk immediately
                         if self.config.auto_paste:
                             self.typer.type_text(clean_text)
+                            self._update_insert_time()
                             # Add space after for separation
                             self.typer.type_text(" ")
                         self._pending_chunk_texts.append(clean_text)
