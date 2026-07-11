@@ -1862,7 +1862,7 @@ class TurboWhisper:
         else:
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
 
-        QTimer.singleShot(2000, self._floating_indicator.set_idle)
+        self._floating_indicator.set_idle()
 
         # Clean up
         self._pending_chunk_texts = []
@@ -1877,7 +1877,7 @@ class TurboWhisper:
         if len(audio_data) < self.config.min_audio_bytes:
             print(f"_stop_recording: too short ({len(audio_data)} < {self.config.min_audio_bytes}), aborting")
             self._floating_indicator.set_status("Too short", "#f59e0b")
-            QTimer.singleShot(2000, self._floating_indicator.set_idle)
+            self._floating_indicator.set_idle()
             return
 
         self.is_processing = True
@@ -1976,7 +1976,7 @@ class TurboWhisper:
                     except OSError:
                         pass
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
-            QTimer.singleShot(2000, self._floating_indicator.set_idle)
+            self._floating_indicator.set_idle()
             return
 
         # Filter out model artifacts
@@ -1984,7 +1984,7 @@ class TurboWhisper:
         if _is_hallucination(clean_text):
             logger.debug(f"Batch mode: model artifact '{clean_text[:50]}', skipping")
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
-            QTimer.singleShot(2000, self._floating_indicator.set_idle)
+            self._floating_indicator.set_idle()
             return
 
         self.config.add_to_history(clean_text, audio_file=audio_filename)
@@ -2006,7 +2006,7 @@ class TurboWhisper:
         else:
             self._floating_indicator.set_status("Done!", "#84cc16")
 
-        QTimer.singleShot(2000, self._floating_indicator.set_idle)
+        self._floating_indicator.set_idle()
 
     def _on_transcription_error(self, error: str) -> None:
         self.is_processing = False
