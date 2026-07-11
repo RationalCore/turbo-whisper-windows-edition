@@ -1238,6 +1238,7 @@ class TurboWhisper:
 
         self.is_recording = False
         self.is_processing = False
+        self.is_stopping = False
         self._pending_waveform_data = None
         self._last_notification_time = 0.0
         self._processing_watchdog = QTimer()
@@ -1526,6 +1527,10 @@ class TurboWhisper:
             return
         self._last_toggle = now
 
+        if self.is_stopping:
+            logger.debug(f"_toggle_recording: still stopping, rejecting")
+            return
+
         if self.is_processing:
             thread = self._processing_thread
             if thread is not None and thread.is_alive():
@@ -1791,6 +1796,9 @@ class TurboWhisper:
             print("_stop_recording: not recording, returning")
             return
 
+        # Block hotkey while stopping
+        self.is_stopping = True
+
         # Show stopping indicator immediately
         self._floating_indicator.set_status("Stopping...", "#f59e0b")
 
@@ -1807,6 +1815,9 @@ class TurboWhisper:
         else:
             # Batch mode: transcribe full audio
             self._stop_batch_recording()
+
+        self.is_stopping = False
+
 
     def _stop_streaming_recording(self) -> None:
         """Stop streaming recording immediately — kill in-flight transcriptions,
