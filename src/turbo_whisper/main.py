@@ -1740,7 +1740,8 @@ class TurboWhisper:
                 logger.info(f"transcribe_chunk #{_seq}: STALE session {_session_id} != {self._streaming_session_id}, discarding")
                 return
             self.signals.show_status.emit(f"Transcribing chunk #{_seq}...")
-            self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+            if self.is_recording:
+                self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
                 logger.info(f"transcribe_chunk #{_seq}: calling API...")
                 text = self.client.transcribe_sync(chunk_audio)
