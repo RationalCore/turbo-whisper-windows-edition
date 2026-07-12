@@ -925,7 +925,8 @@ class RecordingWindow(QWidget):
         """Event filter for hotkey key input capture."""
         if obj == self.hotkey_key_input:
             if event.type() == event.Type.MouseButtonPress:
-                self._start_key_capture()
+                self.hotkey_key_input.clear()
+                self.hotkey_key_input.setFocus()
                 return True
         return super().eventFilter(obj, event)
 
