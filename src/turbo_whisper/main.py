@@ -1705,9 +1705,9 @@ class TurboWhisper:
         self._last_insert_time = time.time()
 
     def _check_auto_stop(self) -> None:
-        """Check if auto-stop should trigger (no text was inserted for too long)."""
+        """Check if auto-stop should trigger (streaming mode only — no text was inserted for too long)."""
         timeout = self.config.auto_stop_timeout
-        if timeout <= 0 or not self.is_recording:
+        if timeout <= 0 or not self.is_recording or not self.config.streaming_mode:
             return
 
         elapsed = time.time() - self._last_insert_time
