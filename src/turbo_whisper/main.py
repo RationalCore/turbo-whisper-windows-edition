@@ -1875,15 +1875,23 @@ class TurboWhisper:
         complete in-flight transcriptions, flush remaining audio."""
         logger.info("_stop_streaming_recording: stop mic then finish")
 
-        # 1. Stop microphone immediately (no more chunks)
-        self.recorder.disable_streaming()
-        audio_data = self.recorder.stop()
+        # 1. Kill auto-stop first (prevents signal spam from recorder thread)
+        self.recorder._on_auto_stop = None
+        self.recorder._on_chunk_ready = None
+        self.recorder._chunk_interval_frames = 0
         self._chunk_order_timer.stop()
 
-        # 2. Show Finishing... while we process remaining
+        # 2. Flush remaining chunk BEFORE stopping (needs _streaming_mode=True)
+        remaining_chunk = self.recorder.flush_remaining_chunk()
+
+        # 3. Stop microphone
+        self.recorder._streaming_mode = False
+        audio_data = self.recorder.stop()
+
+        # 4. Show Finishing... while we process remaining
         self._floating_indicator.set_status("Finishing...", "#f59e0b")
 
-        # 3. Wait for in-flight transcriptions (max 10s)
+        # 5. Wait for in-flight transcriptions (max 10s)
         wait_start = time.time()
         while self._chunk_transcription_threads and (time.time() - wait_start) < 10:
             alive = [t for t in self._chunk_transcription_threads if t.is_alive()]
@@ -1892,11 +1900,10 @@ class TurboWhisper:
             logger.info(f"Waiting for {len(alive)} transcription threads...")
             time.sleep(0.2)
 
-        # 4. Process the chunk queue (ordered)
+        # 6. Process the chunk queue (ordered)
         self._process_chunk_queue()
 
-        # 5. Flush remaining audio, transcribe it
-        remaining_chunk = self.recorder.flush_remaining_chunk()
+        # 7. Transcribe remaining chunk (already flushed at step 2)
         if remaining_chunk and len(remaining_chunk) >= self.config.min_chunk_bytes:
             logger.info(f"Processing final chunk: {len(remaining_chunk)} bytes")
             try:
