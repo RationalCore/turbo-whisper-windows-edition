@@ -922,7 +922,12 @@ class RecordingWindow(QWidget):
         super().focusOutEvent(event)
 
     def eventFilter(self, obj, event):
-        """Event filter for hotkey key input — just let it through naturally."""
+        """Event filter for hotkey key input capture."""
+        if obj == self.hotkey_key_input:
+            if event.type() == event.Type.MouseButtonPress:
+                self.hotkey_key_input.clear()
+                self.hotkey_key_input.setFocus()
+                return True
         return super().eventFilter(obj, event)
 
     def set_status(self, text: str, animate: bool = False) -> None:
