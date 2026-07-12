@@ -1833,7 +1833,8 @@ class TurboWhisper:
             # Show transcribed text briefly
             display = text[:40] + "..." if len(text) > 40 else text
             self.window.set_status(f"Transcribed: {display}")
-            self._floating_indicator.set_status("Listening...", "#84cc16")
+            if self.is_recording:
+                self._floating_indicator.set_status("Listening...", "#84cc16")
 
     def _cancel_recording(self) -> None:
         """Cancel recording and clean up."""
