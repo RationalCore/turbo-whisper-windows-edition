@@ -1541,8 +1541,13 @@ class TurboWhisper:
             lambda: self.signals.toggle_recording.emit(),
         )
         if self.hotkey_manager:
-            self.hotkey_manager.start()
-            logger.info(f"Hotkey manager restarted with: {self.config.hotkey}")
+            # Don't start if the settings window is focused — _on_window_focus_change
+            # will start it when the window loses focus.
+            if not self.window.isActiveWindow():
+                self.hotkey_manager.start()
+                logger.info(f"Hotkey manager restarted with: {self.config.hotkey}")
+            else:
+                logger.info(f"Hotkey manager created but not started (window focused): {self.config.hotkey}")
 
     def _is_main_window_focused(self) -> bool:
         """Check if the main window is the foreground window."""
