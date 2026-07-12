@@ -1477,6 +1477,13 @@ class TurboWhisper:
         self.window.raise_()
         self.window.activateWindow()
 
+        # Stop the hotkey hook while settings are open (Windows may refuse
+        # focus transfer to a Tool window from another process, so we can't
+        # rely on focusInEvent alone to kill the WH_KEYBOARD_LL hook).
+        if self.hotkey_manager:
+            self.hotkey_manager.stop()
+            logger.info("Hotkey manager stopped (settings window opened)")
+
     def _show_tray_menu(self) -> None:
         """Show the tray context menu at cursor position (from visualizer right-click)."""
         from PyQt6.QtGui import QCursor
