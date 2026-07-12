@@ -226,6 +226,7 @@ class RecordingWindow(QWidget):
     """Main application window with waveform and all settings visible."""
 
     cancel_requested = pyqtSignal()
+    window_hidden = pyqtSignal()
 
     def __init__(self, config: Config):
         super().__init__()
@@ -921,6 +922,11 @@ class RecordingWindow(QWidget):
             self._on_focus_change(False)
         super().focusOutEvent(event)
 
+    def hideEvent(self, event) -> None:
+        """Window hidden — notify to re-enable hotkey manager."""
+        self.window_hidden.emit()
+        super().hideEvent(event)
+
     def eventFilter(self, obj, event):
         """Event filter for hotkey key input capture."""
         if obj == self.hotkey_key_input:
@@ -1304,6 +1310,7 @@ class TurboWhisper:
         self.signals.chunk_transcription_complete.connect(self._on_chunk_transcription_complete)
         self.signals.show_status.connect(self.window.set_status)
         self.window.cancel_requested.connect(self._cancel_recording)
+        self.window.window_hidden.connect(self._on_window_hidden)
 
         self._waveform_timer = QTimer()
         self._waveform_timer.timeout.connect(self._poll_waveform_data)
@@ -1512,6 +1519,12 @@ class TurboWhisper:
         # Update tray tooltip
         self.tray.setToolTip(f"Turbo Whisper - Press {hotkey_str} to dictate")
         self.toggle_action.setText(f"Start Recording ({hotkey_str})")
+
+    def _on_window_hidden(self) -> None:
+        """Restart hotkey manager when settings window is hidden/closed."""
+        if self.hotkey_manager:
+            self.hotkey_manager.start()
+            logger.info("Hotkey manager restarted (settings window hidden)")
 
     def _on_window_focus_change(self, has_focus: bool) -> None:
         """Handle window focus changes to disable/enable hotkey."""
