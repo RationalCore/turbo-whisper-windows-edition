@@ -1707,29 +1707,24 @@ class TurboWhisper:
 
         self._chunk_count += 1
         chunk_seq = self._chunk_count
-        logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes")
+        logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes, session_id={self._streaming_session_id}")
 
         def transcribe_chunk(_seq=chunk_seq, _session_id=self._streaming_session_id):
-            # Add small delay to avoid rate limiting
+            logger.info(f"transcribe_chunk #{_seq}: started, session_id={_session_id}")
             time.sleep(0.5)
-            # Discard if a new recording session started while we were waiting
             if _session_id != self._streaming_session_id:
-                logger.debug(f"Chunk #{_seq} discarded (stale session)")
+                logger.info(f"transcribe_chunk #{_seq}: STALE session {_session_id} != {self._streaming_session_id}, discarding")
                 return
-            # Update status only when actually sending to API
             self.signals.show_status.emit(f"Transcribing chunk #{_seq}...")
             self._floating_indicator.set_status("Transcribing...", "#f59e0b")
             try:
-                # NOTE: no context/prompt param — passing previous text as prompt
-                # causes Whisper to hallucinate it on silence chunks,
-                # leading to exponential duplication.
+                logger.info(f"transcribe_chunk #{_seq}: calling API...")
                 text = self.client.transcribe_sync(chunk_audio)
-                # Store result with sequence number for ordered processing
+                logger.info(f"transcribe_chunk #{_seq}: API OK, len={len(text) if text else 0}, preview='{text[:80] if text else 'EMPTY'}'")
                 self._chunk_results[_seq] = text
-                # Signal that a chunk is ready for ordered processing
                 self._chunk_queue.put(_seq)
             except Exception as e:
-                logger.error(f"Chunk #{_seq} transcription failed: {e}")
+                logger.error(f"transcribe_chunk #{_seq}: API FAILED: {e}")
                 self._chunk_results[_seq] = None
                 self._chunk_queue.put(_seq)
 
