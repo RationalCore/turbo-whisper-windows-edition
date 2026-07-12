@@ -670,6 +670,25 @@ class RecordingWindow(QWidget):
         timeout_row.addWidget(self.timeout_value_label)
         s.addLayout(timeout_row)
 
+        # Max recording duration (batch mode)
+        max_row = QHBoxLayout()
+        max_label = QLabel("Max recording:")
+        max_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.max_slider = QSlider(Qt.Orientation.Horizontal)
+        self.max_slider.setRange(0, 600)
+        self.max_slider.setValue(self.config.max_recording_seconds)
+        self.max_slider.setSingleStep(30)
+        self.max_slider.setPageStep(60)
+        self.max_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.max_slider.setTickInterval(60)
+        self.max_slider.valueChanged.connect(self._on_max_duration_changed)
+        self.max_value_label = QLabel(self._get_max_duration_description(self.config.max_recording_seconds))
+        self.max_value_label.setStyleSheet("color: #888; font-size: 10px;")
+        max_row.addWidget(max_label)
+        max_row.addWidget(self.max_slider)
+        max_row.addWidget(self.max_value_label)
+        s.addLayout(max_row)
+
         # Update visibility based on current streaming mode
         self._update_streaming_ui_visibility()
 
@@ -758,6 +777,21 @@ class RecordingWindow(QWidget):
         """Update auto-stop timeout display."""
         if hasattr(self, 'timeout_value_label'):
             self.timeout_value_label.setText(self._get_timeout_description(value))
+
+    def _get_max_duration_description(self, value: int) -> str:
+        """Get human-readable description for max recording duration."""
+        if value <= 0:
+            return "Off"
+        minutes = value // 60
+        seconds = value % 60
+        if minutes > 0:
+            return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
+        return f"{seconds}s"
+
+    def _on_max_duration_changed(self, value: int) -> None:
+        """Update max recording duration display."""
+        if hasattr(self, 'max_value_label'):
+            self.max_value_label.setText(self._get_max_duration_description(value))
 
     def _update_hotkey_display(self) -> None:
         """Update hotkey display from current config."""
@@ -1045,6 +1079,8 @@ class RecordingWindow(QWidget):
             self.config.vad_trim_silence = self.vad_trim_cb.isChecked()
         if hasattr(self, 'timeout_slider'):
             self.config.auto_stop_timeout = self.timeout_slider.value()
+        if hasattr(self, 'max_slider'):
+            self.config.max_recording_seconds = self.max_slider.value()
 
         # Visualizer settings
         self.config.indicator_opacity = self.opacity_slider.value()
@@ -1569,6 +1605,7 @@ class TurboWhisper:
 
         # Reset auto-stop timer (tracking time since last insert)
         self._last_insert_time = time.time()
+        self._recording_start_time = time.time()
 
         # Capture the foreground window handle BEFORE recording starts
         # This ensures we paste into the correct window after recording
@@ -1705,15 +1742,26 @@ class TurboWhisper:
         self._last_insert_time = time.time()
 
     def _check_auto_stop(self) -> None:
-        """Check if auto-stop should trigger (streaming mode only — no text was inserted for too long)."""
-        timeout = self.config.auto_stop_timeout
-        if timeout <= 0 or not self.is_recording or not self.config.streaming_mode:
+        """Check recording limits: auto-stop (streaming) / max duration (batch)."""
+        if not self.is_recording:
             return
 
-        elapsed = time.time() - self._last_insert_time
-        if elapsed >= timeout:
-            logger.info(f"Auto-stop: no text inserted for {elapsed:.0f}s (timeout={timeout}s)")
-            self._stop_recording()
+        if self.config.streaming_mode:
+            # Streaming: auto-stop on silence after speech
+            timeout = self.config.auto_stop_timeout
+            if timeout > 0:
+                elapsed = time.time() - self._last_insert_time
+                if elapsed >= timeout:
+                    logger.info(f"Auto-stop: no text inserted for {elapsed:.0f}s (timeout={timeout}s)")
+                    self._stop_recording()
+        else:
+            # Batch: max recording duration
+            max_dur = self.config.max_recording_seconds
+            if max_dur > 0:
+                elapsed = time.time() - self._recording_start_time
+                if elapsed >= max_dur:
+                    logger.info(f"Max recording duration reached: {elapsed:.0f}s (limit={max_dur}s)")
+                    self._stop_recording()
 
     def _on_chunk_transcription_complete(self, text: str) -> None:
         """Called when a chunk transcription completes (streaming mode).
@@ -1800,7 +1848,10 @@ class TurboWhisper:
         self.is_stopping = True
 
         # Show stopping indicator immediately
-        self._floating_indicator.set_status("Stopping...", "#f59e0b")
+        if self.config.streaming_mode:
+            self._floating_indicator.set_status("Finishing...", "#f59e0b")
+        else:
+            self._floating_indicator.set_status("Stopping...", "#f59e0b")
 
         self.is_recording = False
         self.toggle_action.setText("Start Recording")
@@ -1820,23 +1871,52 @@ class TurboWhisper:
 
 
     def _stop_streaming_recording(self) -> None:
-        """Stop streaming recording immediately — kill in-flight transcriptions,
-        discard remaining audio, save what was already typed."""
-        logger.info("_stop_streaming_recording: instant stop")
+        """Stop streaming recording — stop mic, show Finishing...,
+        complete in-flight transcriptions, flush remaining audio."""
+        logger.info("_stop_streaming_recording: stop mic then finish")
 
-        # Prevent recorder from firing more signals
+        # 1. Stop microphone immediately (no more chunks)
         self.recorder.disable_streaming()
+        audio_data = self.recorder.stop()
         self._chunk_order_timer.stop()
 
-        # Stop recorder now — don't wait for threads or flush remaining audio
-        audio_data = self.recorder.stop()
-        logger.info(f"_stop_streaming_recording: recorder stopped, "
-                    f"{len(self._pending_chunk_texts)} chunks already typed")
+        # 2. Show Finishing... while we process remaining
+        self._floating_indicator.set_status("Finishing...", "#f59e0b")
 
-        # Combine whatever chunks were already processed
+        # 3. Wait for in-flight transcriptions (max 10s)
+        wait_start = time.time()
+        while self._chunk_transcription_threads and (time.time() - wait_start) < 10:
+            alive = [t for t in self._chunk_transcription_threads if t.is_alive()]
+            if not alive:
+                break
+            logger.info(f"Waiting for {len(alive)} transcription threads...")
+            time.sleep(0.2)
+
+        # 4. Process the chunk queue (ordered)
+        self._process_chunk_queue()
+
+        # 5. Flush remaining audio, transcribe it
+        remaining_chunk = self.recorder.flush_remaining_chunk()
+        if remaining_chunk and len(remaining_chunk) >= self.config.min_chunk_bytes:
+            logger.info(f"Processing final chunk: {len(remaining_chunk)} bytes")
+            try:
+                text = self.client.transcribe_sync(remaining_chunk)
+                if text:
+                    clean_text = text.strip()
+                    if not _is_hallucination(clean_text) and clean_text:
+                        if self.config.auto_paste:
+                            self.typer.type_text(clean_text)
+                            self._update_insert_time()
+                            self.typer.type_text(" ")
+                        self._pending_chunk_texts.append(clean_text)
+                        logger.info(f"Final chunk transcribed: '{clean_text[:50]}'")
+            except Exception as e:
+                logger.error(f"Final chunk failed: {e}")
+
+        logger.info(f"_stop_streaming_recording: {len(self._pending_chunk_texts)} chunks total")
+
+        # 6. Save to history and show Done!
         full_text = " ".join(self._pending_chunk_texts).strip()
-
-        # Save to history if we have text
         if full_text:
             audio_filename = None
             if self.config.store_recordings and audio_data:

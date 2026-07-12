@@ -83,7 +83,8 @@ class Config:
     min_chunk_bytes: int = 2000  # Minimum chunk size to transcribe
     vad_aggressiveness: int = 1  # webrtcvad aggressiveness (0-3): 0=quality, 1=low bitrate, 2=default, 3=aggressive
     vad_trim_silence: bool = False  # Remove leading/trailing silence from chunks
-    auto_stop_timeout: int = 0  # Auto-stop recording after N seconds of silence (0=disabled)
+    auto_stop_timeout: int = 0  # Auto-stop recording after N seconds of silence (0=disabled, streaming only)
+    max_recording_seconds: int = 300  # Max recording duration in batch mode (0=unlimited, default 5 min)
 
     def get_recordings_dir(self) -> Path:
         """Get the directory for storing audio recordings."""
