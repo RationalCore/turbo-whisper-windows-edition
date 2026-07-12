@@ -1600,7 +1600,11 @@ class TurboWhisper:
         self._update_icons(recording=True)
 
         # Update floating indicator
-        self._floating_indicator.set_status("Recording...", "#ef4444")
+        if self.config.streaming_mode:
+            self._floating_indicator.set_status("Listening...", "#84cc16")
+        else:
+            hotkey_str = "+".join(k.capitalize() for k in self.config.hotkey)
+            self._floating_indicator.set_status(f"Press {hotkey_str} to stop", "#84cc16")
         self._floating_indicator.set_recording(True)
 
         # Reset auto-stop timer (tracking time since last insert)
