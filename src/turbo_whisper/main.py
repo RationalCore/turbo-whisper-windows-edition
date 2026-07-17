@@ -325,90 +325,71 @@ class RecordingWindow(QWidget):
         """
         )
 
-        from PyQt6.QtWidgets import QFrame, QScrollArea
+        from PyQt6.QtWidgets import QTabWidget
 
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
 
-        # Scroll area for all content
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        content_widget = QWidget()
-        content_widget.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
-
-        # === Status ===
-        status_widget = QWidget()
-        status_widget.setStyleSheet("background: transparent;")
-        status_layout = QHBoxLayout(status_widget)
-        status_layout.setContentsMargins(4, 0, 4, 0)
-
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #888; font-size: 11px;")
-        status_layout.addWidget(self.status_label)
-        status_layout.addStretch()
-
-        #self._hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        self.hints_label = QLabel(f"Hotkey: {self.config.hotkey}")
-        self.hints_label.setStyleSheet("color: #666; font-size: 10px;")
-        status_layout.addWidget(self.hints_label)
-
+        # === Top bar: status + opacity (always visible) ===
+        # Status labels kept hidden so set_status/set_recording_hint don't crash
+        self.status_label = QLabel("")
+        self.status_label.hide()
+        self.hints_label = QLabel("")
+        self.hints_label.hide()
         self._status_dots = 0
         self._status_timer = QTimer()
         self._status_timer.timeout.connect(self._animate_status)
         self._status_timer.setInterval(400)
-        layout.addWidget(status_widget)
 
-        # === Visualizer Opacity (always visible) ===
-        opacity_row = QHBoxLayout()
-        opacity_row.setContentsMargins(4, 0, 4, 0)
-        opacity_label = QLabel("Opacity:")
-        opacity_label.setStyleSheet("color: #666; font-size: 10px;")
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(30, 255)
-        self.opacity_slider.setValue(self.config.indicator_opacity)
-        self.opacity_slider.setFixedWidth(120)
-        self.opacity_value_label = QLabel(str(self.config.indicator_opacity))
-        self.opacity_value_label.setStyleSheet("color: #666; font-size: 10px;")
-        self.opacity_slider.valueChanged.connect(
-            lambda v: self.opacity_value_label.setText(str(v))
-        )
-        opacity_row.addWidget(opacity_label)
-        opacity_row.addWidget(self.opacity_slider)
-        opacity_row.addWidget(self.opacity_value_label)
-        opacity_row.addStretch()
-        layout.addLayout(opacity_row)
+        # === Tabs ===
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: none; background: #f0f0f0; }
+            QTabBar::tab {
+                background: #e0e0e0; color: #333; padding: 6px 16px;
+                border: 1px solid #ccc; border-bottom: none;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                margin-right: 2px; font-size: 11px;
+            }
+            QTabBar::tab:selected {
+                background: #f0f0f0; font-weight: bold;
+            }
+            QTabBar::tab:hover { background: #eaeaea; }
+        """)
 
-        # === Settings (always visible) ===
-        settings_widget = self._build_settings_panel()
-        layout.addWidget(settings_widget)
+        tabs.addTab(self._build_common_tab(), "Common")
+        tabs.addTab(self._build_behavior_tab(), "Behavior")
+        tabs.addTab(self._build_streaming_tab(), "Streaming")
+        tabs.addTab(self._build_history_tab(), "History")
 
-        layout.addStretch()
-
-        scroll.setWidget(content_widget)
-        container_layout.addWidget(scroll)
+        container_layout.addWidget(tabs)
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(container)
 
-        # Set size - wider and taller to fit all settings
+        # Set size
         self.setFixedSize(self.config.window_width + 40, self.config.window_height + 480)
 
-    def _build_settings_panel(self):
-        """Build the collapsible settings panel with all config options."""
-        from PyQt6.QtWidgets import QCheckBox, QComboBox, QLineEdit, QListWidget, QPushButton, QSlider
+    def _build_common_tab(self):
+        """Build the Common tab: API, Audio, Hotkey, Opacity, Save."""
+        from PyQt6.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QLineEdit, QPushButton, QSlider
 
-        panel = QWidget()
-        panel.setStyleSheet("""
+        _group_style = """
+            QGroupBox {
+                font-size: 11px; font-weight: bold; color: #0078d4;
+                border: 1px solid #cccccc; border-radius: 4px;
+                margin-top: 8px; padding: 8px 6px 4px 6px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px; padding: 0 4px;
+            }
+        """
+        _widget_style = """
             QWidget { background-color: #f0f0f0; }
-            QLabel { color: #000000; font-size: 10px; }
+            QLabel { color: #000000; font-size: 11px; }
             QLineEdit { background-color: #ffffff;
                 border: 1px solid #cccccc; border-radius: 2px; color: #000000;
                 padding: 4px; font-size: 11px; }
@@ -421,27 +402,26 @@ class RecordingWindow(QWidget):
             QComboBox::drop-down { border: none; }
             QCheckBox { color: #000000; font-size: 11px; }
             QCheckBox::indicator { width: 16px; height: 16px; }
-            QListWidget { background-color: #ffffff;
-                border: 1px solid #cccccc; border-radius: 2px; color: #000000; font-size: 11px; }
-        """)
+        """
 
+        panel = QWidget()
+        panel.setStyleSheet(_widget_style)
         s = QVBoxLayout(panel)
-        s.setContentsMargins(12, 8, 12, 8)
-        s.setSpacing(6)
+        s.setContentsMargins(8, 4, 8, 4)
+        s.setSpacing(4)
 
-        # === API Settings ===
-        api_label = QLabel("API Settings")
-        api_label.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold; margin-top: 4px;")
-        s.addWidget(api_label)
+        # === API ===
+        api_group = QGroupBox("API")
+        api_group.setStyleSheet(_group_style)
+        api_form = QFormLayout(api_group)
+        api_form.setContentsMargins(6, 10, 6, 4)
+        api_form.setSpacing(4)
+        api_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # API URL
-        s.addWidget(QLabel("API URL"))
         self.api_url_input = QLineEdit(self.config.api_url)
         self.api_url_input.setPlaceholderText("https://api.openai.com/v1/audio/transcriptions")
-        s.addWidget(self.api_url_input)
+        api_form.addRow("URL:", self.api_url_input)
 
-        # API Key
-        s.addWidget(QLabel("API Key"))
         key_row = QHBoxLayout()
         self._actual_api_key = self.config.api_key
         self.api_key_input = QLineEdit()
@@ -466,50 +446,43 @@ class RecordingWindow(QWidget):
         self.key_copy_btn.setStyleSheet("QPushButton { background: transparent; border: 1px solid #555; border-radius: 4px; }")
         self.key_copy_btn.clicked.connect(lambda: self._copy_to_clipboard(self._actual_api_key, self.key_copy_btn))
         key_row.addWidget(self.key_copy_btn)
-        s.addLayout(key_row)
+        api_form.addRow("Key:", key_row)
 
-        # Model
-        s.addWidget(QLabel("Model"))
         self.model_input = QLineEdit(self.config.model)
         self.model_input.setPlaceholderText("openai/whisper-large-v3-turbo")
-        s.addWidget(self.model_input)
+        api_form.addRow("Model:", self.model_input)
 
-        # Language
-        s.addWidget(QLabel("Language"))
         self.language_combo = QComboBox()
         languages = [("Russian", "ru"), ("English", "en"), ("German", "de"), ("French", "fr"),
                      ("Spanish", "es"), ("Italian", "it"), ("Portuguese", "pt"), ("Chinese", "zh"),
                      ("Japanese", "ja"), ("Korean", "ko"), ("Auto-detect", "")]
         for name, code in languages:
             self.language_combo.addItem(name, code)
-        # Set current language
         for i in range(self.language_combo.count()):
             if self.language_combo.itemData(i) == self.config.language:
                 self.language_combo.setCurrentIndex(i)
                 break
-        s.addWidget(self.language_combo)
+        api_form.addRow("Language:", self.language_combo)
 
-        # === Audio Settings ===
-        audio_label = QLabel("Audio")
-        audio_label.setStyleSheet("color: #0078d4; font-size: 11px; font-weight: bold; margin-top: 8px;")
-        s.addWidget(audio_label)
+        s.addWidget(api_group)
 
-        # Microphone
-        s.addWidget(QLabel("Microphone"))
+        # === Audio ===
+        audio_group = QGroupBox("Audio")
+        audio_group.setStyleSheet(_group_style)
+        audio_form = QFormLayout(audio_group)
+        audio_form.setContentsMargins(6, 10, 6, 4)
+        audio_form.setSpacing(4)
+        audio_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
         self.mic_combo = QComboBox()
         self._populate_mic_dropdown()
-        s.addWidget(self.mic_combo)
+        audio_form.addRow("Mic:", self.mic_combo)
 
-        # Gain slider
         gain_row = QHBoxLayout()
-        self.gain_label = QLabel("Mic Gain:")
         self.gain_value_label = QLabel("100%")
         self.gain_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
-        gain_row.addWidget(self.gain_label)
-        gain_row.addStretch()
-        gain_row.addWidget(self.gain_value_label)
-        s.addLayout(gain_row)
-
+        self.gain_value_label.setFixedWidth(36)
+        self.gain_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
         self.sensitivity_slider.setRange(0, 200)
         self.sensitivity_slider.setValue(self.config.mic_gain)
@@ -518,17 +491,22 @@ class RecordingWindow(QWidget):
         self.sensitivity_slider.valueChanged.connect(self._on_sensitivity_changed)
         self._current_mic_level = 0
         self._update_sensitivity_style()
-        s.addWidget(self.sensitivity_slider)
+        gain_row.addWidget(self.sensitivity_slider)
+        gain_row.addWidget(self.gain_value_label)
+        audio_form.addRow("Gain:", gain_row)
+
+        s.addWidget(audio_group)
 
         # === Hotkey ===
-        hotkey_label = QLabel("Hotkey")
-        hotkey_label.setStyleSheet("color: #0078d4; font-size: 11px; font-weight: bold; margin-top: 8px;")
-        s.addWidget(hotkey_label)
+        hotkey_group = QGroupBox("Hotkey")
+        hotkey_group.setStyleSheet(_group_style)
+        hotkey_form = QFormLayout(hotkey_group)
+        hotkey_form.setContentsMargins(6, 10, 6, 4)
+        hotkey_form.setSpacing(4)
+        hotkey_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Hotkey configuration: modifier dropdown + key input
         hotkey_row = QHBoxLayout()
 
-        # Modifier combo box
         self.hotkey_modifier_combo = QComboBox()
         self.hotkey_modifier_combo.addItems([
             "None (single key)",
@@ -551,7 +529,6 @@ class RecordingWindow(QWidget):
         hotkey_row.addWidget(self.hotkey_modifier_combo)
         self.hotkey_modifier_combo.currentIndexChanged.connect(self._update_hotkey_preview)
 
-        # Key input - simple editable text field
         self.hotkey_key_input = QLineEdit()
         self.hotkey_key_input.setPlaceholderText("e.g. F8, ~, A")
         self.hotkey_key_input.setMaximumWidth(100)
@@ -562,55 +539,146 @@ class RecordingWindow(QWidget):
         self.hotkey_key_input.textChanged.connect(self._on_hotkey_key_changed)
         hotkey_row.addWidget(self.hotkey_key_input)
 
-        # Preview
         self.hotkey_preview = QLabel()
         self.hotkey_preview.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold;")
         hotkey_row.addWidget(self.hotkey_preview)
 
-        s.addLayout(hotkey_row)
-
-        # Initialize hotkey display from current config
+        hotkey_form.addRow("Key:", hotkey_row)
         self._update_hotkey_display()
 
-        # === Behavior ===
-        behavior_label = QLabel("Behavior")
-        behavior_label.setStyleSheet("color: #0078d4; font-size: 11px; font-weight: bold; margin-top: 8px;")
-        s.addWidget(behavior_label)
+        s.addWidget(hotkey_group)
 
-        # Auto-paste
+        # === Opacity ===
+        opacity_group = QGroupBox("Indicator")
+        opacity_group.setStyleSheet(_group_style)
+        opacity_form = QFormLayout(opacity_group)
+        opacity_form.setContentsMargins(6, 10, 6, 4)
+        opacity_form.setSpacing(4)
+        opacity_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        opacity_row = QHBoxLayout()
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(30, 255)
+        self.opacity_slider.setValue(self.config.indicator_opacity)
+        self.opacity_slider.valueChanged.connect(
+            lambda v: self.opacity_value_label.setText(str(v))
+        )
+        self.opacity_value_label = QLabel(str(self.config.indicator_opacity))
+        self.opacity_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.opacity_value_label.setFixedWidth(36)
+        self.opacity_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+        opacity_form.addRow("Opacity:", opacity_row)
+
+        s.addWidget(opacity_group)
+
+        s.addStretch()
+
+        # === Save ===
+        self.save_btn = QPushButton("Save Settings")
+        self.save_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d4; color: #ffffff; border: none; "
+            "border-radius: 2px; font-size: 11px; font-weight: bold; padding: 6px 12px; margin-top: 4px; }"
+            "QPushButton:hover { background-color: #106ebe; }"
+            "QPushButton:pressed { background-color: #005a9e; }"
+        )
+        self.save_btn.clicked.connect(self._save_settings)
+        s.addWidget(self.save_btn)
+
+        return panel
+
+    def _build_behavior_tab(self):
+        """Build the Behavior tab with checkboxes."""
+        from PyQt6.QtWidgets import QCheckBox, QGroupBox
+
+        _group_style = """
+            QGroupBox {
+                font-size: 11px; font-weight: bold; color: #0078d4;
+                border: 1px solid #cccccc; border-radius: 4px;
+                margin-top: 8px; padding: 8px 6px 4px 6px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px; padding: 0 4px;
+            }
+        """
+
+        tab = QWidget()
+        tab.setStyleSheet("QWidget { background-color: #f0f0f0; } QCheckBox { color: #000000; font-size: 11px; }")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+
+        group = QGroupBox("Behavior")
+        group.setStyleSheet(_group_style)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(6, 10, 6, 4)
+        group_layout.setSpacing(2)
+
         self.auto_paste_cb = QCheckBox("Auto-type transcription")
         self.auto_paste_cb.setChecked(self.config.auto_paste)
         self.auto_paste_cb.setToolTip("Automatically type transcription into focused window")
-        s.addWidget(self.auto_paste_cb)
+        group_layout.addWidget(self.auto_paste_cb)
 
-        # Copy to clipboard
         self.copy_clipboard_cb = QCheckBox("Copy to clipboard")
         self.copy_clipboard_cb.setChecked(self.config.copy_to_clipboard)
         self.copy_clipboard_cb.setToolTip("Copy transcription text to clipboard")
-        s.addWidget(self.copy_clipboard_cb)
+        group_layout.addWidget(self.copy_clipboard_cb)
 
-        # Character-by-character typing
         self.char_typing_cb = QCheckBox("Character-by-character typing")
         self.char_typing_cb.setChecked(self.config.use_character_typing)
         self.char_typing_cb.setToolTip("Type character by character instead of clipboard paste")
-        s.addWidget(self.char_typing_cb)
+        group_layout.addWidget(self.char_typing_cb)
 
-        # Store recordings
         self.store_recordings_cb = QCheckBox("Save recordings with history")
         self.store_recordings_cb.setChecked(self.config.store_recordings)
         self.store_recordings_cb.setToolTip("Save WAV files alongside transcription history")
-        s.addWidget(self.store_recordings_cb)
+        group_layout.addWidget(self.store_recordings_cb)
 
-        # Auto-start
         self.auto_start_cb = QCheckBox("Auto-start on login")
         self.auto_start_cb.setChecked(self.config.auto_start)
         self.auto_start_cb.setToolTip("Automatically start Turbo Whisper when you log in")
-        s.addWidget(self.auto_start_cb)
+        group_layout.addWidget(self.auto_start_cb)
 
-        # === Streaming Mode ===
-        streaming_label = QLabel("Streaming Mode")
-        streaming_label.setStyleSheet("color: #0078d4; font-size: 11px; font-weight: bold; margin-top: 8px;")
-        s.addWidget(streaming_label)
+        layout.addWidget(group)
+        layout.addStretch()
+        return tab
+
+    def _build_streaming_tab(self):
+        """Build the Streaming tab with streaming-specific settings."""
+        from PyQt6.QtWidgets import QCheckBox, QGroupBox, QSlider
+
+        _group_style = """
+            QGroupBox {
+                font-size: 11px; font-weight: bold; color: #0078d4;
+                border: 1px solid #cccccc; border-radius: 4px;
+                margin-top: 8px; padding: 8px 6px 4px 6px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px; padding: 0 4px;
+            }
+        """
+
+        tab = QWidget()
+        tab.setStyleSheet("""
+            QWidget { background-color: #f0f0f0; }
+            QLabel { color: #000000; font-size: 11px; }
+            QCheckBox { color: #000000; font-size: 11px; }
+            QSlider::groove:horizontal { background: #cccccc; height: 6px; border-radius: 3px; }
+            QSlider::handle:horizontal { background: #0078d4; width: 14px;
+                margin: -4px 0; border-radius: 7px; }
+        """)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+
+        group = QGroupBox("Streaming")
+        group.setStyleSheet(_group_style)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(6, 10, 6, 4)
+        group_layout.setSpacing(4)
 
         self.streaming_cb = QCheckBox("Enable streaming (transcribe as you speak)")
         self.streaming_cb.setChecked(self.config.streaming_mode)
@@ -620,11 +688,12 @@ class RecordingWindow(QWidget):
             "Window stays visible during recording with live status updates."
         )
         self.streaming_cb.stateChanged.connect(self._on_streaming_mode_changed)
-        s.addWidget(self.streaming_cb)
+        group_layout.addWidget(self.streaming_cb)
 
-        # Silence threshold (only relevant for streaming)
+        # Silence threshold
         silence_row = QHBoxLayout()
-        self.silence_label = QLabel("Silence threshold:")
+        self.silence_label = QLabel("Silence:")
+        self.silence_label.setFixedWidth(56)
         self.silence_slider = QSlider(Qt.Orientation.Horizontal)
         self.silence_slider.setRange(200, 1000)
         self.silence_slider.setValue(self.config.silence_threshold_ms)
@@ -634,14 +703,17 @@ class RecordingWindow(QWidget):
         self.silence_slider.valueChanged.connect(self._on_silence_threshold_changed)
         self.silence_value_label = QLabel(f"{self.config.silence_threshold_ms}ms")
         self.silence_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.silence_value_label.setFixedWidth(52)
+        self.silence_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         silence_row.addWidget(self.silence_label)
         silence_row.addWidget(self.silence_slider)
         silence_row.addWidget(self.silence_value_label)
-        s.addLayout(silence_row)
+        group_layout.addLayout(silence_row)
 
-        # VAD Aggressiveness (only relevant for streaming)
+        # VAD Aggressiveness
         vad_row = QHBoxLayout()
-        self.vad_label = QLabel("VAD sensitivity:")
+        self.vad_label = QLabel("VAD:")
+        self.vad_label.setFixedWidth(56)
         self.vad_slider = QSlider(Qt.Orientation.Horizontal)
         self.vad_slider.setRange(0, 3)
         self.vad_slider.setValue(self.config.vad_aggressiveness)
@@ -651,24 +723,26 @@ class RecordingWindow(QWidget):
         self.vad_slider.valueChanged.connect(self._on_vad_changed)
         self.vad_value_label = QLabel(self._get_vad_description(self.config.vad_aggressiveness))
         self.vad_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.vad_value_label.setFixedWidth(64)
+        self.vad_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         vad_row.addWidget(self.vad_label)
         vad_row.addWidget(self.vad_slider)
         vad_row.addWidget(self.vad_value_label)
-        s.addLayout(vad_row)
+        group_layout.addLayout(vad_row)
 
-        # VAD trim silence
-        self.vad_trim_cb = QCheckBox("Remove silence from chunks (VAD trim)")
+        self.vad_trim_cb = QCheckBox("Trim silence from chunks")
         self.vad_trim_cb.setChecked(self.config.vad_trim_silence)
         self.vad_trim_cb.setToolTip(
             "When enabled, leading and trailing silence is removed from\n"
             "audio chunks before sending to API.\n"
             "Reduces API costs and improves transcription accuracy."
         )
-        s.addWidget(self.vad_trim_cb)
+        group_layout.addWidget(self.vad_trim_cb)
 
-        # Auto-stop timeout (listen mode timeout)
+        # Auto-stop timeout
         timeout_row = QHBoxLayout()
-        self.timeout_label = QLabel("Stop after silence:")
+        self.timeout_label = QLabel("Timeout:")
+        self.timeout_label.setFixedWidth(56)
         self.timeout_slider = QSlider(Qt.Orientation.Horizontal)
         self.timeout_slider.setRange(0, 30)
         self.timeout_slider.setValue(self.config.auto_stop_timeout)
@@ -679,14 +753,17 @@ class RecordingWindow(QWidget):
         self.timeout_slider.valueChanged.connect(self._on_timeout_changed)
         self.timeout_value_label = QLabel(self._get_timeout_description(self.config.auto_stop_timeout))
         self.timeout_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.timeout_value_label.setFixedWidth(64)
+        self.timeout_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         timeout_row.addWidget(self.timeout_label)
         timeout_row.addWidget(self.timeout_slider)
         timeout_row.addWidget(self.timeout_value_label)
-        s.addLayout(timeout_row)
+        group_layout.addLayout(timeout_row)
 
         # Max recording duration (batch mode)
         max_row = QHBoxLayout()
-        max_label = QLabel("Max recording:")
+        max_label = QLabel("Max rec:")
+        max_label.setFixedWidth(56)
         max_label.setStyleSheet("color: #888; font-size: 10px;")
         self.max_slider = QSlider(Qt.Orientation.Horizontal)
         self.max_slider.setRange(0, 600)
@@ -698,47 +775,47 @@ class RecordingWindow(QWidget):
         self.max_slider.valueChanged.connect(self._on_max_duration_changed)
         self.max_value_label = QLabel(self._get_max_duration_description(self.config.max_recording_seconds))
         self.max_value_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.max_value_label.setFixedWidth(64)
+        self.max_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         max_row.addWidget(max_label)
         max_row.addWidget(self.max_slider)
         max_row.addWidget(self.max_value_label)
-        s.addLayout(max_row)
+        group_layout.addLayout(max_row)
 
-        # Update visibility based on current streaming mode
         self._update_streaming_ui_visibility()
 
-        # === History ===
-        history_label = QLabel("History")
-        history_label.setStyleSheet("color: #0078d4; font-size: 11px; font-weight: bold; margin-top: 8px;")
-        s.addWidget(history_label)
+        layout.addWidget(group)
+        layout.addStretch()
+        return tab
+
+    def _build_history_tab(self):
+        """Build the History tab with transcription list."""
+        from PyQt6.QtWidgets import QListWidget, QPushButton
+
+        tab = QWidget()
+        tab.setStyleSheet("background: #f0f0f0;")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         self.history_list = QListWidget()
-        self.history_list.setMinimumHeight(120)
-        self.history_list.setMaximumHeight(200)
         self._refresh_history()
-        s.addWidget(self.history_list)
+        layout.addWidget(self.history_list)
 
-        # Clear history button
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
         self.clear_history_btn = QPushButton("Clear History")
         self.clear_history_btn.setStyleSheet(
             "QPushButton { background-color: #666; color: #fff; border: none; "
-            "border-radius: 4px; font-size: 10px; padding: 4px 8px; }"
+            "border-radius: 4px; font-size: 10px; padding: 6px 14px; }"
             "QPushButton:hover { background-color: #888; }"
         )
         self.clear_history_btn.clicked.connect(self._clear_history)
-        s.addWidget(self.clear_history_btn)
+        btn_row.addWidget(self.clear_history_btn)
 
-        # === Save ===
-        self.save_btn = QPushButton("Save Settings")
-        self.save_btn.setStyleSheet(
-            "QPushButton { background-color: #0078d4; color: #ffffff; border: none; "
-            "border-radius: 2px; font-size: 11px; font-weight: bold; padding: 6px 12px; margin-top: 8px; }"
-            "QPushButton:hover { background-color: #106ebe; }"
-            "QPushButton:pressed { background-color: #005a9e; }"
-        )
-        self.save_btn.clicked.connect(self._save_settings)
-        s.addWidget(self.save_btn)
-
-        return panel
+        layout.addLayout(btn_row)
+        return tab
 
     def _on_streaming_mode_changed(self, state) -> None:
         """Toggle streaming mode and show/hide related settings."""
@@ -747,18 +824,10 @@ class RecordingWindow(QWidget):
     def _update_streaming_ui_visibility(self) -> None:
         """Update visibility of streaming-related UI elements."""
         is_streaming = self.streaming_cb.isChecked() if hasattr(self, 'streaming_cb') else self.config.streaming_mode
-        if hasattr(self, 'silence_label'):
-            self.silence_label.setVisible(is_streaming)
-        if hasattr(self, 'silence_slider'):
-            self.silence_slider.setVisible(is_streaming)
-        if hasattr(self, 'silence_value_label'):
-            self.silence_value_label.setVisible(is_streaming)
-        if hasattr(self, 'vad_label'):
-            self.vad_label.setVisible(is_streaming)
-        if hasattr(self, 'vad_slider'):
-            self.vad_slider.setVisible(is_streaming)
-        if hasattr(self, 'vad_value_label'):
-            self.vad_value_label.setVisible(is_streaming)
+        for attr in ('silence_label', 'silence_slider', 'silence_value_label',
+                     'vad_label', 'vad_slider', 'vad_value_label', 'vad_trim_cb'):
+            if hasattr(self, attr):
+                getattr(self, attr).setVisible(is_streaming)
         # Auto-stop timeout is always visible
 
     def _on_silence_threshold_changed(self, value: int) -> None:
@@ -774,10 +843,10 @@ class RecordingWindow(QWidget):
     def _get_vad_description(self, value: int) -> str:
         """Get human-readable description for VAD aggressiveness value."""
         descriptions = {
-            0: "Quality (most sensitive)",
+            0: "Sensitive",
             1: "Balanced",
             2: "Default",
-            3: "Aggressive (may miss quiet speech)"
+            3: "Aggressive"
         }
         return descriptions.get(value, f"Mode {value}")
 
@@ -1159,12 +1228,12 @@ class RecordingWindow(QWidget):
             lay.setContentsMargins(4, 2, 4, 2)
             display = text[:40] + "..." if len(text) > 40 else text
             label = QLabel(f"{time_str}{display}")
-            label.setStyleSheet("color: #ccc; font-size: 11px;")
+            label.setStyleSheet("color: #333; font-size: 11px;")
             label.setToolTip(text)
             lay.addWidget(label, stretch=1)
 
             copy_btn = QPushButton()
-            copy_btn.setIcon(get_copy_icon(14, "#888"))
+            copy_btn.setIcon(get_copy_icon(14, "#555"))
             copy_btn.setFixedSize(24, 24)
             copy_btn.setStyleSheet("QPushButton { background: transparent; border: none; border-radius: 4px; }")
             copy_btn.clicked.connect(lambda checked, t=text: self._copy_history_item(t))
@@ -1172,7 +1241,7 @@ class RecordingWindow(QWidget):
 
             if audio_file:
                 play_btn = QPushButton()
-                play_btn.setIcon(get_play_icon(14, "#888"))
+                play_btn.setIcon(get_play_icon(14, "#555"))
                 play_btn.setFixedSize(24, 24)
                 play_btn.setStyleSheet("QPushButton { background: transparent; border: none; border-radius: 4px; }")
                 play_btn.clicked.connect(lambda checked, f=audio_file, b=play_btn: self._play_audio(f, b))
