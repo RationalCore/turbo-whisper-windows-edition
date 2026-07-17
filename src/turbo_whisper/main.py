@@ -149,6 +149,19 @@ from turbo_whisper.typer import Typer
 from turbo_whisper.floating_indicator import FloatingIndicatorProcess
 
 
+def _fix_pyaudio_encoding(name: str) -> str:
+    """Fix Cyrillic device names returned by PyAudio on Windows.
+
+    PyAudio returns UTF-8 bytes that Python interprets using the system
+    codepage (cp1251 for Cyrillic Windows), producing mojibake.
+    Re-encoding as cp1251 and decoding as UTF-8 restores the original text.
+    """
+    try:
+        return name.encode("cp1251").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return name
+
+
 def _setup_logger() -> logging.Logger:
     """Set up file logger for main module."""
     logger = logging.getLogger("turbo-whisper.main")
@@ -1041,7 +1054,8 @@ class RecordingWindow(QWidget):
                 try:
                     info = audio.get_device_info_by_index(i)
                     if info["maxInputChannels"] > 0 and info["maxOutputChannels"] == 0:
-                        self.mic_combo.addItem(f"{info['name']} ({int(info['defaultSampleRate'])}Hz)", i)
+                        name = _fix_pyaudio_encoding(info['name'])
+                        self.mic_combo.addItem(f"{name} ({int(info['defaultSampleRate'])}Hz)", i)
                 except Exception:
                     pass
             audio.terminate()

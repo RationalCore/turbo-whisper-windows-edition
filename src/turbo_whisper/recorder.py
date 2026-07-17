@@ -109,6 +109,17 @@ class AudioRecorder:
         self._peak_level = 0.0  # adaptive peak for auto-stop speech detection
         self._last_speech_frame = 0  # frame counter for auto-stop
 
+    @staticmethod
+    def _fix_device_name(name: str) -> str:
+        """Fix Cyrillic device names from PyAudio on Windows.
+
+        PyAudio returns UTF-8 bytes misinterpreted as system codepage (cp1251).
+        """
+        try:
+            return name.encode("cp1251").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return name
+
     def get_input_devices(self) -> list[dict]:
         """Get list of available input devices."""
         # Try PipeWire first (Linux)
@@ -132,10 +143,11 @@ class AudioRecorder:
             try:
                 info = self.audio.get_device_info_by_index(i)
                 if info["maxInputChannels"] > 0:
+                    name = self._fix_device_name(info["name"])
                     devices.append(
                         {
                             "index": i,
-                            "name": info["name"],
+                            "name": name,
                             "channels": info["maxInputChannels"],
                             "sample_rate": int(info["defaultSampleRate"]),
                         }
