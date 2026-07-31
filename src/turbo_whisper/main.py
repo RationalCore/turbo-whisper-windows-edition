@@ -1745,11 +1745,12 @@ class TurboWhisper:
                 self.recorder.start(level_callback=self._on_audio_level)
                 print("_start_recording: recorder started (batch mode)")
             except Exception as e:
-                print(f"_start_recording FAILED: {e}")
+                print(f"[ERROR] Microphone: {e}", file=sys.stderr)
                 self.is_recording = False
                 self.toggle_action.setText("Start Recording")
                 self._update_icons(recording=False)
                 self._waveform_timer.stop()
+                self._floating_indicator.set_status("Mic error", "#ef4444", str(e)[:40])
                 self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
 
     def _start_streaming_recording(self) -> None:
@@ -1792,12 +1793,14 @@ class TurboWhisper:
             self._floating_indicator.start()
         except Exception as e:
             logger.error(f"Streaming recording FAILED: {e}")
+            print(f"[ERROR] Streaming recording: {e}", file=sys.stderr)
             self.is_recording = False
             self.toggle_action.setText("Start Recording")
             self._update_icons(recording=False)
             self._waveform_timer.stop()
             self._chunk_order_timer.stop()
             self.window.hide()
+            self._floating_indicator.set_status("Mic error", "#ef4444", str(e)[:40])
             self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
 
     def _on_auto_stop(self) -> None:
@@ -1833,8 +1836,14 @@ class TurboWhisper:
                 self._chunk_queue.put(_seq)
             except Exception as e:
                 logger.error(f"transcribe_chunk #{_seq}: API FAILED: {e}")
+                print(f"[ERROR] Chunk #{_seq}: {e}", file=sys.stderr)
                 self._chunk_results[_seq] = None
                 self._chunk_queue.put(_seq)
+                # Fatal errors (401, 403, 404) — stop recording immediately
+                err_str = str(e)
+                if any(code in err_str for code in ("401", "403", "Unauthorized", "Access denied")):
+                    logger.error(f"transcribe_chunk #{_seq}: fatal error, stopping recording")
+                    self.signals.transcription_error.emit(err_str)
 
         thread = threading.Thread(target=transcribe_chunk, daemon=True)
         thread.start()
@@ -2023,6 +2032,8 @@ class TurboWhisper:
                         logger.info(f"Final chunk transcribed: '{clean_text[:50]}'")
             except Exception as e:
                 logger.error(f"Final chunk failed: {e}")
+                print(f"[ERROR] Final chunk: {e}", file=sys.stderr)
+                self.signals.transcription_error.emit(str(e))
 
         logger.info(f"_stop_streaming_recording: {len(self._pending_chunk_texts)} chunks total")
 
@@ -2203,12 +2214,27 @@ class TurboWhisper:
         self.is_processing = False
         self._processing_watchdog.stop()
         logger.error(f"Transcription error: {error}")
-        # Show more informative error message
-        if "429" in error or "rate limit" in error.lower():
-            self._floating_indicator.set_status("Rate limited - try again", "#f59e0b")
+
+        # Print concise error to console (visible in bat launcher)
+        print(f"[ERROR] {error}", file=sys.stderr)
+
+        # Classify error and set persistent indicator status (stays until next action)
+        if "401" in error:
+            self._floating_indicator.set_status("Invalid API key", "#ef4444",
+                "Open settings and enter API key")
+        elif "429" in error or "rate limit" in error.lower():
+            self._floating_indicator.set_status("Rate limited", "#f59e0b",
+                "Try again in a few seconds")
+        elif "timed out" in error.lower() or "timeout" in error.lower():
+            self._floating_indicator.set_status("Request timeout", "#ef4444",
+                "Check internet connection")
+        elif "connect" in error.lower() or "network" in error.lower():
+            self._floating_indicator.set_status("Network error", "#ef4444",
+                "Check internet connection")
         else:
-            self._floating_indicator.set_status("Error", "#ef4444", error[:30])
-        QTimer.singleShot(3000, self._floating_indicator.set_idle)
+            self._floating_indicator.set_status("Transcription error", "#ef4444",
+                error[:40])
+        # Indicator stays in error state until user presses hotkey again (set_idle called on next recording)
 
     def _quit(self) -> None:
         if self.is_recording or self.is_processing:
@@ -2237,6 +2263,32 @@ class TurboWhisper:
         self._floating_indicator._kill()
         self.app.quit()
 
+    def _check_api_key(self) -> None:
+        """Check if API key is configured and show warning if not."""
+        if not self.config.api_key or not self.config.api_key.strip():
+            msg = "API key not configured — open settings and enter your key"
+            print(f"[WARNING] {msg}", file=sys.stderr)
+            self._floating_indicator.set_status("No API key", "#f59e0b",
+                "Open settings and enter API key")
+        else:
+            print("[OK] API key configured, validating in background...", file=sys.stderr)
+            # Key exists — validate with a lightweight request in background
+            def validate():
+                try:
+                    import httpx
+                    headers = {"Authorization": f"Bearer {self.config.api_key}"}
+                    with httpx.Client(timeout=10.0) as client:
+                        resp = client.options(self.config.api_url, headers=headers)
+                        if resp.status_code == 401:
+                            print("[ERROR] API key is invalid (401 Unauthorized)", file=sys.stderr)
+                            self._floating_indicator.set_status("Invalid API key", "#ef4444",
+                                "Open settings and check API key")
+                        elif resp.status_code < 500:
+                            print("[OK] API key validated successfully", file=sys.stderr)
+                except Exception:
+                    pass  # Network errors during validation are non-fatal
+            threading.Thread(target=validate, daemon=True).start()
+
     def run(self) -> int:
         if self.hotkey_manager:
             self.hotkey_manager.start()
@@ -2244,6 +2296,8 @@ class TurboWhisper:
         self._floating_indicator.start()
         # Set initial opacity
         self._floating_indicator.set_opacity(self.config.indicator_opacity)
+        # Check API key
+        self._check_api_key()
         # Start background microphone for visual feedback
         self._start_background_mic()
         return self.app.exec()

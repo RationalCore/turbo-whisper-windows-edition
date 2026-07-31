@@ -127,8 +127,18 @@ class FloatingIndicator(QWidget):
             if config_path.exists():
                 with open(config_path, "r") as f:
                     pos = json.load(f)
-                self.move(pos.get("x", 100), pos.get("y", 100))
-                return
+                x = pos.get("x", 100)
+                y = pos.get("y", 100)
+                screen = self.screen()
+                if screen:
+                    geo = screen.geometry()
+                    if (x + self._width > geo.x() and x < geo.right() and
+                            y + self._height > geo.y() and y < geo.bottom()):
+                        self.move(x, y)
+                        return
+                else:
+                    self.move(x, y)
+                    return
         except Exception:
             pass
         self._position_on_screen()
@@ -387,7 +397,9 @@ class FloatingIndicatorProcess:
             self._proc.start(python, [str(script), self._hotkey_str])
 
         if not self._proc.waitForStarted(3000):
-            logger.error("Visualizer process failed to start")
+            msg = "Visualizer process failed to start"
+            logger.error(msg)
+            print(f"[indicator] ERROR: {msg}", file=sys.stderr)
             return
 
         logger.info("Visualizer process started (pid=%d)", self._proc.processId())
@@ -434,6 +446,7 @@ class FloatingIndicatorProcess:
         data = self._proc.readAllStandardError().data().decode("utf-8", errors="replace")
         if data.strip():
             logger.info("[visualizer] %s", data.strip())
+            print(f"[indicator] {data.strip()}", file=sys.stderr)
 
     def _read_stdout(self):
         """Read stdout from the child (for double-click and right-click events)."""
@@ -456,6 +469,14 @@ class FloatingIndicatorProcess:
 
     def _on_finished(self, exit_code, exit_status):
         logger.info("Visualizer process exited (code=%d, status=%s)", exit_code, exit_status)
+        if exit_code != 0:
+            stderr = self._proc.readAllStandardError().data().decode("utf-8", errors="replace")
+            stdout = self._proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
+            print(f"[indicator] Visualizer crashed (exit code {exit_code})", file=sys.stderr)
+            if stderr.strip():
+                print(f"[indicator] stderr: {stderr.strip()}", file=sys.stderr)
+            if stdout.strip():
+                print(f"[indicator] stdout: {stdout.strip()}", file=sys.stderr)
         FloatingIndicatorProcess._instance = None
 
     def _kill(self):

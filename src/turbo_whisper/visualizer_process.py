@@ -137,8 +137,20 @@ class _IndicatorWindow(QWidget):
             if config_path.exists():
                 with open(config_path) as f:
                     pos = json.load(f)
-                self.move(pos.get("x", 100), pos.get("y", 100))
-                return
+                x = pos.get("x", 100)
+                y = pos.get("y", 100)
+                # Verify the position is visible on the current screen
+                screen = self.screen()
+                if screen:
+                    geo = screen.geometry()
+                    # Check if the window (with its size) is at least partially visible
+                    if (x + self._width > geo.x() and x < geo.right() and
+                            y + self._height > geo.y() and y < geo.bottom()):
+                        self.move(x, y)
+                        return
+                else:
+                    self.move(x, y)
+                    return
         except Exception:
             pass
         self._position_on_screen()
@@ -355,7 +367,11 @@ def main():
     )
     logger.info("Visualizer process started (pid=%d)", os.getpid())
 
-    app = QApplication(sys.argv)
+    try:
+        app = QApplication(sys.argv)
+    except Exception as e:
+        print(f"[visualizer] FATAL: Cannot create QApplication: {e}", file=sys.stderr)
+        sys.exit(1)
     app.setQuitOnLastWindowClosed(False)
 
     # Read hotkey from command-line arg (passed by FloatingIndicatorProcess).

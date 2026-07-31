@@ -172,13 +172,22 @@ class WhisperClient:
 
                     if response.status_code == 401:
                         logger.error("Unauthorized - check API key")
-                        raise WhisperAPIError("Unauthorized - check your API key in settings")
+                        raise WhisperAPIError("Unauthorized (401) - check your API key in settings")
                     elif response.status_code == 403:
                         logger.error("Access denied")
-                        raise WhisperAPIError("Access denied - check your API key permissions")
+                        raise WhisperAPIError("Access denied (403) - check your API key permissions")
                     elif response.status_code == 404:
                         logger.error("API endpoint not found")
-                        raise WhisperAPIError("API endpoint not found - check your API URL")
+                        raise WhisperAPIError("API endpoint not found (404) - check your API URL")
+                    elif response.status_code == 429:
+                        logger.warning(f"Rate limited (attempt {attempt}/{max_retries})")
+                        if attempt < max_retries:
+                            logger.info(f"Retrying in {retry_delay}s...")
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        raise WhisperAPIError("Rate limited (429) - too many requests, try again later")
                     elif response.status_code >= 500:
                         err_msg = response.text
                         logger.error(f"Server error (attempt {attempt}/{max_retries}): "
