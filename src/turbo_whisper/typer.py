@@ -382,7 +382,8 @@ class Typer:
         time.sleep(0.3)
 
         # ----------------------------------------------------------------
-        # Method 1: AttachThreadInput + SetForegroundWindow + keybd_event
+        # Method 1: AttachThreadInput + SetForegroundWindow + SendInput
+        # with KEYEVENTF_SCANCODE (layout-independent physical key presses)
         # ----------------------------------------------------------------
         old_foreground = 0
         try:
@@ -414,15 +415,18 @@ class Typer:
 
             time.sleep(0.1)
 
-            # Send Ctrl+V via keybd_event (NOT blocked by UIPI)
-            logger.info("_simulate_paste_windows: method 1 - keybd_event Ctrl+V")
-            user32.keybd_event(VK_CONTROL, 0, 0, 0)        # Ctrl down
+            # Send Ctrl+V via keybd_event with explicit scan codes
+            # Scan codes are physical key positions — work regardless of keyboard layout
+            SC_CONTROL = 0x1D  # Left Ctrl scan code
+            SC_V = 0x2F        # V key scan code
+            logger.info("_simulate_paste_windows: method 1 - keybd_event Ctrl+V (scan codes)")
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, 0, 0)        # Ctrl down
             time.sleep(0.05)
-            user32.keybd_event(VK_V, 0, 0, 0)               # V down
+            user32.keybd_event(VK_V, SC_V, 0, 0)                    # V down
             time.sleep(0.05)
-            user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0) # V up
+            user32.keybd_event(VK_V, SC_V, KEYEVENTF_KEYUP, 0)      # V up
             time.sleep(0.05)
-            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, KEYEVENTF_KEYUP, 0)  # Ctrl up
             time.sleep(0.1)
 
             logger.info("_simulate_paste_windows: keybd_event Ctrl+V sent successfully")
@@ -613,18 +617,20 @@ class Typer:
 
             time.sleep(0.1)
 
-            # Send Ctrl+V via keybd_event
+            # Send Ctrl+V via keybd_event with scan codes (layout-independent)
+            SC_CONTROL = 0x1D
+            SC_V = 0x2F
             old_fg = user32.GetForegroundWindow()
             user32.SetForegroundWindow(hwnd)
             time.sleep(0.05)
 
-            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, 0, 0)
             time.sleep(0.02)
-            user32.keybd_event(VK_V, 0, 0, 0)
+            user32.keybd_event(VK_V, SC_V, 0, 0)
             time.sleep(0.02)
-            user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_V, SC_V, KEYEVENTF_KEYUP, 0)
             time.sleep(0.02)
-            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, KEYEVENTF_KEYUP, 0)
             time.sleep(0.1)
 
             # Restore focus
@@ -638,7 +644,7 @@ class Typer:
             except Exception:
                 pass
 
-            logger.info("_paste_to_console: SendInput method completed")
+            logger.info("_paste_to_console: keybd_event method completed")
             return True
 
         except Exception as e:

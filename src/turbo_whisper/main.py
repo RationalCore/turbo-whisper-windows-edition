@@ -240,6 +240,7 @@ class RecordingWindow(QWidget):
 
     cancel_requested = pyqtSignal()
     window_hidden = pyqtSignal()
+    models_fetched = pyqtSignal(object)  # list of (id, name) or None
 
     def __init__(self, config: Config):
         super().__init__()
@@ -248,6 +249,7 @@ class RecordingWindow(QWidget):
         self._is_capturing_key = False
         self._key_listener = None
         self._setup_ui()
+        self.models_fetched.connect(self._on_models_fetched)
 
     def _setup_ui(self) -> None:
         """Set up the main window UI with all settings visible."""
@@ -298,7 +300,17 @@ class RecordingWindow(QWidget):
                 padding: 4px;
                 font-size: 11px;
             }
-            QComboBox::drop-down { border: none; }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #666666;
+                margin-right: 5px;
+            }
             QCheckBox { color: #000000; font-size: 11px; }
             QCheckBox::indicator { width: 16px; height: 16px; }
             QListWidget {
@@ -371,6 +383,9 @@ class RecordingWindow(QWidget):
 
         # Set size
         self.setFixedSize(self.config.window_width + 40, self.config.window_height + 480)
+
+        # Connect all settings to save instantly on change
+        self._connect_instant_settings()
 
     def _build_common_tab(self):
         """Build the Common tab: API, Audio, Hotkey, Opacity, Save."""
@@ -448,9 +463,16 @@ class RecordingWindow(QWidget):
         key_row.addWidget(self.key_copy_btn)
         api_form.addRow("Key:", key_row)
 
-        self.model_input = QLineEdit(self.config.model)
-        self.model_input.setPlaceholderText("openai/whisper-large-v3-turbo")
-        api_form.addRow("Model:", self.model_input)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.model_combo.setMinimumWidth(240)
+        self.model_combo.addItem(self.config.model)
+        self.model_combo.setCurrentText(self.config.model)
+        self.model_combo.currentIndexChanged.connect(self._apply_settings)
+        self.model_combo.editTextChanged.connect(self._apply_settings)
+        api_form.addRow("Model:", self.model_combo)
+        self._fetch_models_async()
 
         self.language_combo = QComboBox()
         languages = [("Russian", "ru"), ("English", "en"), ("German", "de"), ("French", "fr"),
@@ -494,8 +516,49 @@ class RecordingWindow(QWidget):
         gain_row.addWidget(self.sensitivity_slider)
         gain_row.addWidget(self.gain_value_label)
         audio_form.addRow("Gain:", gain_row)
+        gain_hint = QLabel("Microphone volume boost. 100% = normal, higher amplifies\n"
+                           "quiet mics. If the waveform is always flat, increase gain.")
+        gain_hint.setStyleSheet("color: #888; font-size: 10px;")
+        gain_hint.setWordWrap(True)
+        audio_form.addRow("", gain_hint)
 
         s.addWidget(audio_group)
+
+        # === Indicator ===
+        indicator_group = QGroupBox("Indicator")
+        indicator_group.setStyleSheet(_group_style)
+        indicator_form = QVBoxLayout(indicator_group)
+        indicator_form.setContentsMargins(6, 10, 6, 4)
+        indicator_form.setSpacing(4)
+        self.show_indicator_cb = QCheckBox("Show floating indicator")
+        self.show_indicator_cb.setChecked(True)
+        self.show_indicator_cb.setToolTip("Show/hide the floating waveform indicator on screen")
+        self.show_indicator_cb.stateChanged.connect(self._handle_indicator_toggle)
+        indicator_form.addWidget(self.show_indicator_cb)
+
+        opacity_row = QHBoxLayout()
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(15, 255)
+        self.opacity_slider.setValue(self.config.indicator_opacity)
+        self.opacity_slider.valueChanged.connect(
+            lambda v: self.opacity_value_label.setText(str(v))
+        )
+        self.opacity_value_label = QLabel(str(self.config.indicator_opacity))
+        self.opacity_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.opacity_value_label.setFixedWidth(36)
+        self.opacity_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+        opacity_label = QLabel("Opacity:")
+        opacity_label.setStyleSheet("font-size: 11px;")
+        indicator_form.addWidget(opacity_label)
+        indicator_form.addLayout(opacity_row)
+        opacity_hint = QLabel("15 = nearly invisible, 255 = fully opaque.")
+        opacity_hint.setStyleSheet("color: #888; font-size: 10px;")
+        opacity_hint.setWordWrap(True)
+        indicator_form.addWidget(opacity_hint)
+
+        s.addWidget(indicator_group)
 
         # === Hotkey ===
         hotkey_group = QGroupBox("Hotkey")
@@ -545,46 +608,16 @@ class RecordingWindow(QWidget):
 
         hotkey_form.addRow("Key:", hotkey_row)
         self._update_hotkey_display()
+        hotkey_hint = QLabel("Single-char keys (e.g. ~) use double-tap to dictate.\n"
+                             "Modifier combos (e.g. Ctrl+Space) fire on single press.\n"
+                             "Requires admin rights to work in elevated windows.")
+        hotkey_hint.setStyleSheet("color: #888; font-size: 10px;")
+        hotkey_hint.setWordWrap(True)
+        hotkey_form.addRow("", hotkey_hint)
 
         s.addWidget(hotkey_group)
 
-        # === Opacity ===
-        opacity_group = QGroupBox("Indicator")
-        opacity_group.setStyleSheet(_group_style)
-        opacity_form = QFormLayout(opacity_group)
-        opacity_form.setContentsMargins(6, 10, 6, 4)
-        opacity_form.setSpacing(4)
-        opacity_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        opacity_row = QHBoxLayout()
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(30, 255)
-        self.opacity_slider.setValue(self.config.indicator_opacity)
-        self.opacity_slider.valueChanged.connect(
-            lambda v: self.opacity_value_label.setText(str(v))
-        )
-        self.opacity_value_label = QLabel(str(self.config.indicator_opacity))
-        self.opacity_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
-        self.opacity_value_label.setFixedWidth(36)
-        self.opacity_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        opacity_row.addWidget(self.opacity_slider)
-        opacity_row.addWidget(self.opacity_value_label)
-        opacity_form.addRow("Opacity:", opacity_row)
-
-        s.addWidget(opacity_group)
-
         s.addStretch()
-
-        # === Save ===
-        self.save_btn = QPushButton("Save Settings")
-        self.save_btn.setStyleSheet(
-            "QPushButton { background-color: #0078d4; color: #ffffff; border: none; "
-            "border-radius: 2px; font-size: 11px; font-weight: bold; padding: 6px 12px; margin-top: 4px; }"
-            "QPushButton:hover { background-color: #106ebe; }"
-            "QPushButton:pressed { background-color: #005a9e; }"
-        )
-        self.save_btn.clicked.connect(self._save_settings)
-        s.addWidget(self.save_btn)
 
         return panel
 
@@ -618,27 +651,39 @@ class RecordingWindow(QWidget):
 
         self.auto_paste_cb = QCheckBox("Auto-type transcription")
         self.auto_paste_cb.setChecked(self.config.auto_paste)
-        self.auto_paste_cb.setToolTip("Automatically type transcription into focused window")
         group_layout.addWidget(self.auto_paste_cb)
+        auto_paste_hint = QLabel("Types the transcribed text directly into whatever\n"
+                                 "window was focused before recording. Disable if you\n"
+                                 "only want clipboard copy.")
+        auto_paste_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        auto_paste_hint.setWordWrap(True)
+        group_layout.addWidget(auto_paste_hint)
 
         self.copy_clipboard_cb = QCheckBox("Copy to clipboard")
         self.copy_clipboard_cb.setChecked(self.config.copy_to_clipboard)
-        self.copy_clipboard_cb.setToolTip("Copy transcription text to clipboard")
         group_layout.addWidget(self.copy_clipboard_cb)
 
         self.char_typing_cb = QCheckBox("Character-by-character typing")
         self.char_typing_cb.setChecked(self.config.use_character_typing)
-        self.char_typing_cb.setToolTip("Type character by character instead of clipboard paste")
         group_layout.addWidget(self.char_typing_cb)
+        char_hint = QLabel("Simulates individual keystrokes instead of clipboard\n"
+                           "paste (Ctrl+V). Slower but works in apps that don't\n"
+                           "accept paste, like some remote desktops.")
+        char_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        char_hint.setWordWrap(True)
+        group_layout.addWidget(char_hint)
 
         self.store_recordings_cb = QCheckBox("Save recordings with history")
         self.store_recordings_cb.setChecked(self.config.store_recordings)
-        self.store_recordings_cb.setToolTip("Save WAV files alongside transcription history")
         group_layout.addWidget(self.store_recordings_cb)
+        record_hint = QLabel("Saves the audio WAV file alongside each transcription\n"
+                             "so you can replay it later from the History tab.")
+        record_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        record_hint.setWordWrap(True)
+        group_layout.addWidget(record_hint)
 
-        self.auto_start_cb = QCheckBox("Auto-start on login")
+        self.auto_start_cb = QCheckBox("Run on Windows startup")
         self.auto_start_cb.setChecked(self.config.auto_start)
-        self.auto_start_cb.setToolTip("Automatically start Turbo Whisper when you log in")
         group_layout.addWidget(self.auto_start_cb)
 
         layout.addWidget(group)
@@ -709,6 +754,12 @@ class RecordingWindow(QWidget):
         silence_row.addWidget(self.silence_slider)
         silence_row.addWidget(self.silence_value_label)
         group_layout.addLayout(silence_row)
+        silence_hint = QLabel("How long to wait after you stop speaking before\n"
+                              "processing. Lower = faster response, higher = fewer\n"
+                              "false triggers from short pauses.")
+        silence_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
+        silence_hint.setWordWrap(True)
+        group_layout.addWidget(silence_hint)
 
         # VAD Aggressiveness
         vad_row = QHBoxLayout()
@@ -729,6 +780,12 @@ class RecordingWindow(QWidget):
         vad_row.addWidget(self.vad_slider)
         vad_row.addWidget(self.vad_value_label)
         group_layout.addLayout(vad_row)
+        vad_hint = QLabel("Voice activity detection sensitivity.\n"
+                          "0 = best quality, 3 = most aggressive filtering.\n"
+                          "Start with 0, increase if getting too much silence noise.")
+        vad_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
+        vad_hint.setWordWrap(True)
+        group_layout.addWidget(vad_hint)
 
         self.vad_trim_cb = QCheckBox("Trim silence from chunks")
         self.vad_trim_cb.setChecked(self.config.vad_trim_silence)
@@ -737,7 +794,14 @@ class RecordingWindow(QWidget):
             "audio chunks before sending to API.\n"
             "Reduces API costs and improves transcription accuracy."
         )
+        self.vad_trim_cb.stateChanged.connect(self._apply_settings)
         group_layout.addWidget(self.vad_trim_cb)
+        trim_hint = QLabel("Removes silent parts from the beginning and end\n"
+                           "of each audio chunk. Saves API costs and improves\n"
+                           "transcription accuracy. Keep enabled for best results.")
+        trim_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        trim_hint.setWordWrap(True)
+        group_layout.addWidget(trim_hint)
 
         # Auto-stop timeout
         timeout_row = QHBoxLayout()
@@ -759,6 +823,12 @@ class RecordingWindow(QWidget):
         timeout_row.addWidget(self.timeout_slider)
         timeout_row.addWidget(self.timeout_value_label)
         group_layout.addLayout(timeout_row)
+        timeout_hint = QLabel("Auto-stops recording after this many seconds of\n"
+                              "silence (after speech was detected). Set to 0 to\n"
+                              "disable — you'll stop manually with the hotkey.")
+        timeout_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
+        timeout_hint.setWordWrap(True)
+        group_layout.addWidget(timeout_hint)
 
         # Max recording duration (batch mode)
         max_row = QHBoxLayout()
@@ -781,6 +851,12 @@ class RecordingWindow(QWidget):
         max_row.addWidget(self.max_slider)
         max_row.addWidget(self.max_value_label)
         group_layout.addLayout(max_row)
+        max_hint = QLabel("Maximum recording duration in batch mode.\n"
+                          "Set to 0 for unlimited. Prevents accidentally\n"
+                          "leaving the mic on for too long.")
+        max_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
+        max_hint.setWordWrap(True)
+        group_layout.addWidget(max_hint)
 
         self._update_streaming_ui_visibility()
 
@@ -820,6 +896,7 @@ class RecordingWindow(QWidget):
     def _on_streaming_mode_changed(self, state) -> None:
         """Toggle streaming mode and show/hide related settings."""
         self._update_streaming_ui_visibility()
+        self._apply_settings()
 
     def _update_streaming_ui_visibility(self) -> None:
         """Update visibility of streaming-related UI elements."""
@@ -834,11 +911,13 @@ class RecordingWindow(QWidget):
         """Update silence threshold display."""
         if hasattr(self, 'silence_value_label'):
             self.silence_value_label.setText(f"{value}ms")
+        self._apply_settings()
 
     def _on_vad_changed(self, value: int) -> None:
         """Update VAD aggressiveness display."""
         if hasattr(self, 'vad_value_label'):
             self.vad_value_label.setText(self._get_vad_description(value))
+        self._apply_settings()
 
     def _get_vad_description(self, value: int) -> str:
         """Get human-readable description for VAD aggressiveness value."""
@@ -860,6 +939,7 @@ class RecordingWindow(QWidget):
         """Update auto-stop timeout display."""
         if hasattr(self, 'timeout_value_label'):
             self.timeout_value_label.setText(self._get_timeout_description(value))
+        self._apply_settings()
 
     def _get_max_duration_description(self, value: int) -> str:
         """Get human-readable description for max recording duration."""
@@ -875,6 +955,7 @@ class RecordingWindow(QWidget):
         """Update max recording duration display."""
         if hasattr(self, 'max_value_label'):
             self.max_value_label.setText(self._get_max_duration_description(value))
+        self._apply_settings()
 
     def _update_hotkey_display(self) -> None:
         """Update hotkey display from current config."""
@@ -1081,6 +1162,7 @@ class RecordingWindow(QWidget):
             value = snapped
         self.gain_value_label.setText(f"{value}%")
         self._update_sensitivity_style()
+        self._apply_settings()
 
     def _update_sensitivity_style(self) -> None:
         gain = self.sensitivity_slider.value() / 100.0
@@ -1137,64 +1219,143 @@ class RecordingWindow(QWidget):
                     self.mic_combo.setCurrentIndex(i)
                     break
 
-    def _save_settings(self) -> None:
-        """Save all settings from UI to config."""
-        # API settings
+    def _fetch_models_async(self) -> None:
+        """Fetch available transcription models from API in background."""
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("Loading...")
+        self.model_combo.setEnabled(False)
+        self.model_combo.blockSignals(False)
+
+        # Capture config values before starting thread
+        api_url = self.config.api_url
+        api_key = self.config.api_key
+        current_model = self.config.model
+
+        def _fetch():
+            try:
+                import httpx
+                # Derive /models URL from the transcription API URL
+                parts = api_url.rstrip("/").split("/")
+                models_url = None
+                for i, part in enumerate(parts):
+                    if part == "audio":
+                        models_url = "/".join(parts[:i]) + "/models"
+                        break
+                if not models_url:
+                    models_url = "/".join(parts[:-1]) + "/models"
+                headers = {}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.get(models_url, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = data.get("data", [])
+                        transcription = [
+                            m for m in models
+                            if "transcription" in m.get("architecture", {}).get("modality", "")
+                        ]
+                        model_list = [(m["id"], m.get("name", m["id"])) for m in transcription]
+                        model_list.sort(key=lambda x: x[1])
+                        self.models_fetched.emit(model_list)
+                        return
+            except Exception as e:
+                print(f"[settings] Failed to fetch models: {e}", file=sys.stderr)
+            self.models_fetched.emit(None)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_models_fetched(self, model_list) -> None:
+        """Populate model combo with fetched models (runs on main thread)."""
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.setEnabled(True)
+        if model_list:
+            for model_id, display_name in model_list:
+                self.model_combo.addItem(display_name, model_id)
+            # Select current model from config
+            for i in range(self.model_combo.count()):
+                if self.model_combo.itemData(i) == self.config.model:
+                    self.model_combo.setCurrentIndex(i)
+                    break
+            else:
+                # Current model not in list — add it as custom entry
+                self.model_combo.insertItem(0, self.config.model, self.config.model)
+                self.model_combo.setCurrentIndex(0)
+        else:
+            self.model_combo.addItem(self.config.model, self.config.model)
+        self.model_combo.blockSignals(False)
+
+    def _connect_instant_settings(self) -> None:
+        """Connect all settings widgets to save config instantly on change."""
+        # API
+        self.api_url_input.editingFinished.connect(self._apply_settings)
+        self.api_key_input.editingFinished.connect(self._apply_settings)
+        self.language_combo.currentIndexChanged.connect(self._apply_settings)
+        # Audio
+        self.mic_combo.currentIndexChanged.connect(self._apply_settings)
+        # Hotkey
+        self.hotkey_modifier_combo.currentIndexChanged.connect(self._on_hotkey_combo_changed)
+        if hasattr(self, 'hotkey_key_combo'):
+            self.hotkey_key_combo.currentIndexChanged.connect(self._on_hotkey_combo_changed)
+        # Behavior checkboxes
+        for cb in (self.auto_paste_cb, self.copy_clipboard_cb, self.char_typing_cb,
+                   self.store_recordings_cb, self.auto_start_cb):
+            cb.stateChanged.connect(self._apply_settings)
+
+    def _on_hotkey_combo_changed(self) -> None:
+        """Apply hotkey change immediately."""
+        self._apply_settings()
+        if hasattr(self, '_on_hotkey_changed'):
+            self._on_hotkey_changed(self.config.hotkey)
+
+    def _apply_settings(self) -> None:
+        """Read all UI values and save config immediately."""
+        old_hotkey = list(self.config.hotkey)
+        # API
         self.config.api_url = self.api_url_input.text()
         self.config.api_key = self._actual_api_key
-        self.config.model = self.model_input.text()
+        # Use item data (model ID) if available, otherwise current text (custom entry)
+        # Skip "Loading..." placeholder
+        model_data = self.model_combo.currentData()
+        model_text = self.model_combo.currentText()
+        if model_text != "Loading...":
+            self.config.model = model_data if model_data else model_text
         self.config.language = self.language_combo.currentData()
-
-        # Audio settings
+        # Audio
         self.config.input_device_index = self.mic_combo.currentData()
         self.config.input_device_name = self.mic_combo.currentText()
         self.config.mic_gain = self.sensitivity_slider.value()
-
-        # Hotkey setting
-        new_hotkey = self._build_hotkey_from_ui()
-
-        # Behavior settings
+        # Behavior
         self.config.auto_paste = self.auto_paste_cb.isChecked()
         self.config.copy_to_clipboard = self.copy_clipboard_cb.isChecked()
         self.config.use_character_typing = self.char_typing_cb.isChecked()
         self.config.store_recordings = self.store_recordings_cb.isChecked()
         self.config.auto_start = self.auto_start_cb.isChecked()
-
-        # Streaming mode settings
-        self.config.streaming_mode = self.streaming_cb.isChecked()
-        self.config.silence_threshold_ms = self.silence_slider.value()
-        self.config.vad_aggressiveness = self.vad_slider.value()
+        # Streaming
+        if hasattr(self, 'streaming_cb'):
+            self.config.streaming_mode = self.streaming_cb.isChecked()
+        if hasattr(self, 'silence_slider'):
+            self.config.silence_threshold_ms = self.silence_slider.value()
+        if hasattr(self, 'vad_slider'):
+            self.config.vad_aggressiveness = self.vad_slider.value()
         if hasattr(self, 'vad_trim_cb'):
             self.config.vad_trim_silence = self.vad_trim_cb.isChecked()
         if hasattr(self, 'timeout_slider'):
             self.config.auto_stop_timeout = self.timeout_slider.value()
         if hasattr(self, 'max_slider'):
             self.config.max_recording_seconds = self.max_slider.value()
-
-        # Visualizer settings
-        self.config.indicator_opacity = self.opacity_slider.value()
-
-        # Hotkey setting - apply before saving
+        # Hotkey
         new_hotkey = self._build_hotkey_from_ui()
         if new_hotkey != self.config.hotkey:
             self.config.hotkey = new_hotkey
-            logger.info(f"Hotkey changed to: {new_hotkey}")
-
-        # Save config
+        # Save
         self.config.save()
         self.config.apply_autostart()
-
-        # Restart hotkey manager if hotkey changed
-        if hasattr(self, '_on_hotkey_changed'):
-            self._on_hotkey_changed(self.config.hotkey)
-            logger.info("Hotkey manager restart signaled with: %s", self.config.hotkey)
-
-        # Show tray notification via callback
-        if hasattr(self, '_on_settings_saved'):
+        # Notify parent if hotkey changed
+        if new_hotkey != old_hotkey and hasattr(self, '_on_settings_saved'):
             self._on_settings_saved()
-
-        self.save_btn.setText("✓ Saved!")
-        QTimer.singleShot(1500, lambda: self.save_btn.setText("Save Settings"))
 
     def _clear_history(self) -> None:
         """Clear all transcription history."""
@@ -1305,8 +1466,13 @@ class RecordingWindow(QWidget):
     def center_on_screen(self) -> None:
         screen = QApplication.primaryScreen().geometry()
         x = (screen.width() - self.width()) // 2
-        y = int(screen.height() * 0.3)
+        y = (screen.height() - self.height()) // 2
         self.move(x, y)
+
+    def _handle_indicator_toggle(self, state: int) -> None:
+        """Forward indicator toggle to parent callback if set."""
+        if hasattr(self, '_on_indicator_toggled') and self._on_indicator_toggled:
+            self._on_indicator_toggled(state)
 
     def mousePressEvent(self, event) -> None:
         # Always let child widgets handle their own events first
@@ -1358,6 +1524,7 @@ class TurboWhisper:
         self.window._on_focus_change = self._on_window_focus_change
         self.window._on_hotkey_changed = self._restart_hotkey_manager
         self.window._on_settings_saved = self._on_settings_saved
+        self.window._on_indicator_toggled = self._on_indicator_toggled
         self.window.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         self._setup_tray()
 
@@ -1377,6 +1544,7 @@ class TurboWhisper:
         self._chunk_count = 0
         self._current_session_text = ""  # Full text for current recording session
         self._streaming_session_id = 0  # Incremented each recording to discard stale chunks
+        self._focus_lost_during_recording = False  # True if target window lost focus
 
         # Ordered chunk processing queue
         import queue
@@ -1411,6 +1579,7 @@ class TurboWhisper:
         self._floating_indicator._on_double_click = self._show_window
         self._floating_indicator._on_right_click = self._show_tray_menu
         self._floating_indicator._on_left_click = self._close_tray_menu
+        self._floating_indicator._on_minimize = self._hide_indicator
 
         # Hotkey callback - check if main window is focused before processing
         def hotkey_callback():
@@ -1461,10 +1630,17 @@ class TurboWhisper:
 
         menu = QMenu()
 
-        # Show Window
-        show_action = QAction("Show Window", menu)
+        # Settings
+        show_action = QAction("Settings", menu)
         show_action.triggered.connect(self._show_window)
         menu.addAction(show_action)
+
+        # Show/Hide Indicator
+        self.indicator_action = QAction("Show Indicator", menu)
+        self.indicator_action.setCheckable(True)
+        self.indicator_action.setChecked(True)
+        self.indicator_action.triggered.connect(self._toggle_indicator)
+        menu.addAction(self.indicator_action)
 
         menu.addSeparator()
 
@@ -1510,6 +1686,35 @@ class TurboWhisper:
         self._show_notification("Turbo Whisper", f"Streaming mode {status}",
                                QSystemTrayIcon.MessageIcon.Information)
 
+    def _toggle_indicator(self) -> None:
+        """Toggle floating indicator visibility."""
+        new_visible = not self.indicator_action.isChecked()
+        self.indicator_action.setChecked(new_visible)
+        if hasattr(self.window, 'show_indicator_cb'):
+            self.window.show_indicator_cb.blockSignals(True)
+            self.window.show_indicator_cb.setChecked(new_visible)
+            self.window.show_indicator_cb.blockSignals(False)
+        if new_visible:
+            self._floating_indicator.show()
+        else:
+            self._floating_indicator.stop()
+
+    def _hide_indicator(self) -> None:
+        """Hide indicator (called from minimize button on indicator)."""
+        self.indicator_action.setChecked(False)
+        if hasattr(self.window, 'show_indicator_cb'):
+            self.window.show_indicator_cb.setChecked(False)
+        self._floating_indicator.stop()
+
+    def _on_indicator_toggled(self, state: int) -> None:
+        """Handle indicator checkbox toggle from settings form."""
+        visible = state == 2  # Qt.CheckState.Checked == 2
+        self.indicator_action.setChecked(visible)
+        if visible:
+            self._floating_indicator.show()
+        else:
+            self._floating_indicator.stop()
+
     def _copy_last_transcription(self) -> None:
         """Copy the most recent transcription to clipboard."""
         if self.config.history:
@@ -1521,8 +1726,9 @@ class TurboWhisper:
                                        QSystemTrayIcon.MessageIcon.Information)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._toggle_indicator()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_window()
 
     def _update_icons(self, recording: bool) -> None:
@@ -1535,6 +1741,7 @@ class TurboWhisper:
         self.window.opacity_value_label.setText(str(value))
         self.config.indicator_opacity = value
         self._floating_indicator.set_opacity(value)
+        self.config.save()
 
     def _on_processing_timeout(self) -> None:
         """Watchdog: if processing takes >30s, reset flag to unblock hotkey."""
@@ -1731,6 +1938,7 @@ class TurboWhisper:
         self._pending_chunk_texts = []
         self._chunk_count = 0
         self._current_session_text = ""
+        self._focus_lost_during_recording = False
 
         self._pending_waveform_data = None
         self._waveform_timer.start()
@@ -1858,6 +2066,31 @@ class TurboWhisper:
         if not self.is_recording:
             return
 
+        # Check if target window lost focus (stop recording if user switched windows)
+        if sys.platform == "win32" and self.typer._target_hwnd:
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                fg_hwnd = user32.GetForegroundWindow()
+                if fg_hwnd and fg_hwnd != self.typer._target_hwnd:
+                    # Check if our own settings window gained focus (don't stop in that case)
+                    if not self._is_main_window_focused():
+                        logger.info(f"Target window lost focus (target={self.typer._target_hwnd}, fg={fg_hwnd}), stopping recording")
+                        # Mark focus lost BEFORE stopping — prevents text insertion
+                        self._focus_lost_during_recording = True
+                        # Clear pending results so nothing gets typed
+                        self._pending_chunk_texts = []
+                        self._chunk_results.clear()
+                        self._stop_recording()
+                        self._show_notification(
+                            "Turbo Whisper",
+                            "Recording stopped — target window lost focus",
+                            QSystemTrayIcon.MessageIcon.Information
+                        )
+                        return
+            except Exception:
+                pass
+
         if self.config.streaming_mode:
             # Streaming: auto-stop on silence after speech
             timeout = self.config.auto_stop_timeout
@@ -1884,6 +2117,15 @@ class TurboWhisper:
 
     def _process_chunk_queue(self) -> None:
         """Process chunks in order from the queue."""
+        # Don't insert text if target window lost focus
+        if self._focus_lost_during_recording:
+            # Drain the queue without inserting
+            while not self._chunk_queue.empty():
+                try:
+                    self._chunk_queue.get_nowait()
+                except:
+                    break
+            return
         while not self._chunk_queue.empty():
             try:
                 chunk_seq = self._chunk_queue.get_nowait()
@@ -1988,6 +2230,20 @@ class TurboWhisper:
         complete in-flight transcriptions, flush remaining audio."""
         logger.info("_stop_streaming_recording: stop mic then finish")
 
+        # If focus was lost, discard everything without inserting
+        if self._focus_lost_during_recording:
+            logger.info("_stop_streaming_recording: focus lost — discarding all chunks")
+            self.recorder._on_auto_stop = None
+            self.recorder._on_chunk_ready = None
+            self.recorder._chunk_interval_frames = 0
+            self._chunk_order_timer.stop()
+            if self.recorder.is_recording:
+                self.recorder.stop()
+            self._floating_indicator.set_status("Cancelled", "#f59e0b")
+            self._floating_indicator.set_idle()
+            self.window.hide()
+            return
+
         # 1. Kill auto-stop first (prevents signal spam from recorder thread)
         self.recorder._on_auto_stop = None
         self.recorder._on_chunk_ready = None
@@ -2072,6 +2328,14 @@ class TurboWhisper:
 
     def _stop_batch_recording(self) -> None:
         """Stop batch recording and transcribe full audio."""
+        # If focus was lost, discard everything without transcribing
+        if self._focus_lost_during_recording:
+            logger.info("_stop_batch_recording: focus lost — discarding audio")
+            self.recorder.stop()
+            self._floating_indicator.set_status("Cancelled", "#f59e0b")
+            self._floating_indicator.set_idle()
+            return
+
         self._floating_indicator.set_status("Processing...", "#f59e0b")
         audio_data = self.recorder.stop()
         print(f"_stop_batch_recording: got {len(audio_data)} bytes of audio")
@@ -2155,16 +2419,23 @@ class TurboWhisper:
         if title.startswith("Copied") and len(message) > 10:
             if not self._last_notification_time > 0:
                 self._last_notification_time = now
-                self.tray.showMessage(title, message, icon, duration_ms)
+                self.tray.showMessage(title, message, get_tray_icon(64), duration_ms)
             return
         if (now - self._last_notification_time) < cooldown:
             return
         self._last_notification_time = now
-        self.tray.showMessage(title, message, icon, duration_ms)
+        self.tray.showMessage(title, message, get_tray_icon(64), duration_ms)
 
     def _on_transcription_complete(self, text: str) -> None:
         self.is_processing = False
         self._processing_watchdog.stop()
+
+        # Don't insert text if target window lost focus
+        if self._focus_lost_during_recording:
+            logger.info("Transcription complete but focus was lost — discarding result")
+            self._floating_indicator.set_status("Cancelled (focus lost)", "#f59e0b")
+            self._floating_indicator.set_idle()
+            return
 
         audio_filename = getattr(self, "_pending_audio_filename", None)
         self._pending_audio_filename = None
@@ -2289,13 +2560,25 @@ class TurboWhisper:
                     pass  # Network errors during validation are non-fatal
             threading.Thread(target=validate, daemon=True).start()
 
+    def _apply_all_settings(self) -> None:
+        """Apply all loaded config settings to the running app."""
+        # Opacity — send multiple times to ensure subprocess receives it
+        self._floating_indicator.set_opacity(self.config.indicator_opacity)
+        # Streaming mode state in tray
+        if hasattr(self, 'streaming_action'):
+            self.streaming_action.setChecked(self.config.streaming_mode)
+        # Indicator visibility
+        if hasattr(self, 'indicator_action'):
+            self.indicator_action.setChecked(True)
+
     def run(self) -> int:
         if self.hotkey_manager:
             self.hotkey_manager.start()
         # Start floating indicator (always visible)
         self._floating_indicator.start()
-        # Set initial opacity
-        self._floating_indicator.set_opacity(self.config.indicator_opacity)
+        # Apply settings with staggered delays to ensure subprocess receives them
+        QTimer.singleShot(500, self._apply_all_settings)
+        QTimer.singleShot(1500, self._apply_all_settings)
         # Check API key
         self._check_api_key()
         # Start background microphone for visual feedback
@@ -2339,6 +2622,45 @@ def ensure_single_instance():
             sys.exit(0)
 
 
+def _is_admin() -> bool:
+    """Check if the current process is running with admin privileges."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def _request_admin_restart() -> bool:
+    """Try to restart with admin privileges via UAC. Returns True if elevation succeeded."""
+    import ctypes
+    if getattr(sys, 'frozen', False):
+        exe = sys.executable
+        params = ""
+    elif os.path.basename(sys.argv[0]) == "main.py":
+        bat = Path(__file__).resolve().parent.parent.parent / "run_turbo_whisper.bat"
+        if bat.exists():
+            exe = str(bat)
+            params = ""
+        else:
+            exe = sys.executable
+            params = '-m turbo_whisper.main'
+    else:
+        exe = sys.executable
+        params = '-m turbo_whisper.main'
+    print("[admin] Requesting elevation (UAC)...", file=sys.stderr)
+    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+    if result > 32:
+        # Success — new admin process will start, exit this one
+        return True
+    # User cancelled UAC or error — continue in normal mode
+    print("[admin] Elevation cancelled. Running without admin rights.", file=sys.stderr)
+    print("[admin] Hotkeys will NOT work in windows running as administrator.", file=sys.stderr)
+    return False
+
+
 def main():
     # When launched as a child visualizer process (PyInstaller build),
     # run the visualizer event loop instead of the main app.
@@ -2346,6 +2668,11 @@ def main():
         from turbo_whisper.visualizer_process import main as viz_main
         viz_main()
         return
+
+    # Auto-elevate to admin on Windows (required for hotkeys in admin windows)
+    if sys.platform == "win32" and not _is_admin() and "--no-admin" not in sys.argv:
+        if _request_admin_restart():
+            sys.exit(0)
 
     ensure_single_instance()
     app = TurboWhisper()

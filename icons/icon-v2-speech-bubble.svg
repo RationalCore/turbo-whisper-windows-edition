@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#0f3460"/>
+    </linearGradient>
+    <linearGradient id="bubble2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#84cc16"/>
+      <stop offset="100%" stop-color="#4d7c0f"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <circle cx="128" cy="128" r="120" fill="url(#bg2)" stroke="#84cc16" stroke-width="3" stroke-opacity="0.3"/>
+  <!-- Speech bubble -->
+  <path d="M60 80 Q60 60 80 60 L176 60 Q196 60 196 80 L196 140 Q196 160 176 160 L120 160 L95 185 L100 160 L80 160 Q60 160 60 140 Z" fill="url(#bubble2)" fill-opacity="0.15" stroke="#84cc16" stroke-width="2.5"/>
+  <!-- Microphone inside bubble -->
+  <rect x="118" y="85" width="20" height="45" rx="10" fill="#84cc16"/>
+  <path d="M105 122 Q105 142 128 142 Q151 142 151 122" fill="none" stroke="#84cc16" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="128" y1="142" x2="128" y2="152" stroke="#84cc16" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Waveform lines inside bubble -->
+  <line x1="75" y1="108" x2="90" y2="108" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  <line x1="75" y1="118" x2="95" y2="118" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+  <line x1="165" y1="108" x2="180" y2="108" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  <line x1="160" y1="118" x2="180" y2="118" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+</svg>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Turbo Whisper — Icon Variants</title>
+<style>
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 40px; }
+  h1 { text-align: center; color: #84cc16; font-size: 28px; margin-bottom: 8px; }
+  p.sub { text-align: center; color: #888; font-size: 14px; margin-bottom: 40px; }
+  .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 32px; max-width: 1200px; margin: 0 auto; }
+  .card {
+    background: #16213e; border: 1px solid #2a2a4a; border-radius: 16px;
+    padding: 24px; text-align: center; width: 280px; transition: transform 0.2s, border-color 0.2s;
+  }
+  .card:hover { transform: translateY(-4px); border-color: #84cc16; }
+  .card img { width: 192px; height: 192px; display: block; margin: 0 auto 16px; }
+  .card h3 { color: #84cc16; font-size: 16px; margin: 0 0 4px; }
+  .card p { color: #999; font-size: 13px; margin: 0; }
+  .sizes { margin-top: 40px; text-align: center; }
+  .sizes h2 { color: #84cc16; font-size: 20px; margin-bottom: 16px; }
+  .size-row { display: flex; align-items: center; justify-content: center; gap: 24px; flex-wrap: wrap; }
+  .size-item { text-align: center; }
+  .size-item span { display: block; color: #888; font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Turbo Whisper — Icon Variants</h1>
+<p class="sub">Выберите понравившийся вариант для приложения</p>
+
+<div class="grid">
+  <div class="card">
+    <img src="icon-v1-mic-waves.svg" alt="v1">
+    <h3>V1 — Microphone + Waves</h3>
+    <p>Классический микрофон со звуковыми волнами по бокам</p>
+  </div>
+  <div class="card">
+    <img src="icon-v2-speech-bubble.svg" alt="v2">
+    <h3>V2 — Speech Bubble</h3>
+    <p>Микрофон в речевом пузыре — символ диктовки</p>
+  </div>
+  <div class="card">
+    <img src="icon-v3-waveform.svg" alt="v3">
+    <h3>V3 — Waveform Bars</h3>
+    <p>Вейформ-бары как на floating-индикаторе</p>
+  </div>
+  <div class="card">
+    <img src="icon-v4-mic-text.svg" alt="v4">
+    <h3>V4 — Mic → Text</h3>
+    <p>Микрофон и текст — процесс транскрипции</p>
+  </div>
+  <div class="card">
+    <img src="icon-v5-rounded-modern.svg" alt="v5">
+    <h3>V5 — Rounded Modern</h3>
+    <p>Современный app-icon: зелёный фон, белый микрофон</p>
+  </div>
+</div>
+
+<div class="sizes">
+  <h2>В трее Windows — все варианты</h2>
+  <div style="background:#0a0a1a; display:inline-block; padding:20px 32px; border-radius:8px; margin:0 auto;">
+    <p style="color:#aaa; font-size:13px; margin:0 0 12px;">16×16 — стандартный размер иконки в трее:</p>
+    <div class="size-row">
+      <div class="size-item"><img src="icon-v1-mic-waves.svg" width="16" height="16" alt="v1"><span>V1</span></div>
+      <div class="size-item"><img src="icon-v2-speech-bubble.svg" width="16" height="16" alt="v2"><span>V2</span></div>
+      <div class="size-item"><img src="icon-v3-waveform.svg" width="16" height="16" alt="v3"><span>V3</span></div>
+      <div class="size-item"><img src="icon-v4-mic-text.svg" width="16" height="16" alt="v4"><span>V4</span></div>
+      <div class="size-item"><img src="icon-v5-rounded-modern.svg" width="16" height="16" alt="v5"><span>V5</span></div>
+    </div>
+    <div style="height:20px"></div>
+    <p style="color:#aaa; font-size:13px; margin:0 0 12px;">32×32 — при масштабировании 200%:</p>
+    <div class="size-row">
+      <div class="size-item"><img src="icon-v1-mic-waves.svg" width="32" height="32" alt="v1"><span>V1</span></div>
+      <div class="size-item"><img src="icon-v2-speech-bubble.svg" width="32" height="32" alt="v2"><span>V2</span></div>
+      <div class="size-item"><img src="icon-v3-waveform.svg" width="32" height="32" alt="v3"><span>V3</span></div>
+      <div class="size-item"><img src="icon-v4-mic-text.svg" width="32" height="32" alt="v4"><span>V4</span></div>
+      <div class="size-item"><img src="icon-v5-rounded-modern.svg" width="32" height="32" alt="v5"><span>V5</span></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

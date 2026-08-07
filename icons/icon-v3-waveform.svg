@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#1a1a3e"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <circle cx="128" cy="128" r="120" fill="url(#bg3)" stroke="#84cc16" stroke-width="3" stroke-opacity="0.3"/>
+  <!-- Waveform bars (center, like the indicator) -->
+  <rect x="52" y="115" width="8" height="26" rx="4" fill="#84cc16" opacity="0.5"/>
+  <rect x="66" y="105" width="8" height="46" rx="4" fill="#84cc16" opacity="0.6"/>
+  <rect x="80" y="90" width="8" height="76" rx="4" fill="#84cc16" opacity="0.75"/>
+  <rect x="94" y="80" width="8" height="96" rx="4" fill="#84cc16" opacity="0.85"/>
+  <rect x="108" y="70" width="8" height="116" rx="4" fill="#84cc16"/>
+  <rect x="122" y="65" width="8" height="126" rx="4" fill="#84cc16"/>
+  <rect x="136" y="70" width="8" height="116" rx="4" fill="#84cc16"/>
+  <rect x="150" y="80" width="8" height="96" rx="4" fill="#84cc16" opacity="0.85"/>
+  <rect x="164" y="90" width="8" height="76" rx="4" fill="#84cc16" opacity="0.75"/>
+  <rect x="178" y="105" width="8" height="46" rx="4" fill="#84cc16" opacity="0.6"/>
+  <rect x="192" y="115" width="8" height="26" rx="4" fill="#84cc16" opacity="0.5"/>
+  <!-- Small microphone at bottom -->
+  <rect x="118" y="200" width="20" height="25" rx="10" fill="#84cc16" opacity="0.6"/>
+  <path d="M110 220 Q110 232 128 232 Q146 232 146 220" fill="none" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+</svg>

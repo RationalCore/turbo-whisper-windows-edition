@@ -118,46 +118,48 @@ def get_stop_icon(size: int = 20, color: str = "#888888") -> QIcon:
     return _svg_to_icon(ICON_STOP, size, color)
 
 
+# V5 Rounded Modern icon — microphone on green background
+_ICON_V5_GREEN = """<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#84cc16"/>
+      <stop offset="100%" stop-color="#4d7c0f"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="48" ry="48" fill="url(#bg)"/>
+  <rect x="108" y="60" width="40" height="65" rx="20" fill="#ffffff"/>
+  <path d="M88 115 Q88 150 128 150 Q168 150 168 115" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <line x1="128" y1="150" x2="128" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <line x1="105" y1="170" x2="151" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M75 90 Q58 128 75 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M181 90 Q198 128 181 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <text x="128" y="210" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#ffffff" fill-opacity="0.25" text-anchor="middle">W</text>
+</svg>"""
+
+_ICON_V5_ORANGE = """<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#c2410c"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="48" ry="48" fill="url(#bg)"/>
+  <rect x="108" y="60" width="40" height="65" rx="20" fill="#ffffff"/>
+  <path d="M88 115 Q88 150 128 150 Q168 150 168 115" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <line x1="128" y1="150" x2="128" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <line x1="105" y1="170" x2="151" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M75 90 Q58 128 75 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M181 90 Q198 128 181 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <text x="128" y="210" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#ffffff" fill-opacity="0.25" text-anchor="middle">W</text>
+</svg>"""
+
+
 def get_tray_icon(size: int = 64, recording: bool = False) -> QIcon:
-    """Get an orb icon for the system tray.
+    """Get the V5 rounded-mic icon for the system tray.
 
     Args:
         size: Icon size in pixels
-        recording: If True, green (recording). If False, orange (idle).
+        recording: If True, green. If False, orange.
     """
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QBrush, QColor, QImage, QRadialGradient
-
-    # Create image with transparency
-    image = QImage(size, size, QImage.Format.Format_ARGB32)
-    image.fill(Qt.GlobalColor.transparent)
-
-    painter = QPainter(image)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    # Create radial gradient for glowing orb effect
-    center = size // 2
-    gradient = QRadialGradient(center, center, center * 0.8)
-
-    if recording:
-        # Green when recording
-        gradient.setColorAt(0.0, QColor(180, 230, 100))  # Light green center
-        gradient.setColorAt(0.5, QColor(132, 204, 22))  # Lime green (#84cc16)
-        gradient.setColorAt(1.0, QColor(60, 100, 10))  # Darker edge
-    else:
-        # Orange when idle
-        gradient.setColorAt(0.0, QColor(255, 200, 100))  # Light orange center
-        gradient.setColorAt(0.5, QColor(249, 115, 22))  # Orange (#f97316)
-        gradient.setColorAt(1.0, QColor(150, 60, 10))  # Darker edge
-
-    painter.setBrush(QBrush(gradient))
-    painter.setPen(Qt.PenStyle.NoPen)
-
-    # Draw the orb (circle with padding)
-    padding = size // 8
-    painter.drawEllipse(padding, padding, size - 2 * padding, size - 2 * padding)
-
-    painter.end()
-
-    pixmap = QPixmap.fromImage(image)
-    return QIcon(pixmap)
+    svg = _ICON_V5_GREEN if recording else _ICON_V5_ORANGE
+    return _svg_to_icon(svg, size)

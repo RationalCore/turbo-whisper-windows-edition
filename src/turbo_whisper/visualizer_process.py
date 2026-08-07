@@ -19,7 +19,7 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QRectF, QObject, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication
 from PyQt6.QtWidgets import QApplication, QWidget
 
 logger = logging.getLogger("turbo_whisper.visualizer")
@@ -44,6 +44,7 @@ class _IndicatorWindow(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.BypassWindowManagerHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -55,6 +56,19 @@ class _IndicatorWindow(QWidget):
         self._drag_pos = None
         self._is_dragging = False
         self._previous_focus_window = None
+        self._clicked_minimize = False  # True if mouseDown was on minimize button
+
+        # Minimize button geometry (top-right corner)
+        self._btn_size = 16
+        self._btn_margin = 4
+        self._minimize_rect = QRectF(
+            self._width - self._btn_size - self._btn_margin,
+            self._btn_margin,
+            self._btn_size,
+            self._btn_size,
+        )
+        self._minimize_hover = False
+        self.setMouseTracking(True)
 
         self._current_level = 0.0
         self._target_level = 0.0
@@ -70,6 +84,7 @@ class _IndicatorWindow(QWidget):
         self._scroll_offset = 0.0
         self._is_recording = False
         self._bg_alpha = 235  # matches default config indicator_opacity
+        self._frame_count = 0
 
         # Must call setWindowOpacity on Windows to properly initialize a
         # layered window (WA_TranslucentBackground). Value 1.0 means "no
@@ -87,6 +102,8 @@ class _IndicatorWindow(QWidget):
         self._timer.start()
         self.show()
         self.raise_()
+        # Re-apply saved position after window is shown (screen geometry is reliable now)
+        self._load_position()
 
     def stop(self):
         self._timer.stop()
@@ -112,12 +129,12 @@ class _IndicatorWindow(QWidget):
         self._is_recording = active
 
     def set_opacity(self, value: int):
-        """Set background opacity (30-255, 255=opaque).
+        """Set background opacity (15-255, 255=opaque).
         
         Only affects the window background/frame. Waveform bars and text
         remain fully opaque regardless of this setting.
         """
-        self._bg_alpha = max(30, min(255, value))
+        self._bg_alpha = max(15, min(255, value))
         self.update()
 
     # ── position persistence ─────────────────────────────────────────────
@@ -139,18 +156,13 @@ class _IndicatorWindow(QWidget):
                     pos = json.load(f)
                 x = pos.get("x", 100)
                 y = pos.get("y", 100)
-                # Verify the position is visible on the current screen
-                screen = self.screen()
-                if screen:
+                # Check if position is visible on ANY connected screen
+                for screen in QGuiApplication.screens():
                     geo = screen.geometry()
-                    # Check if the window (with its size) is at least partially visible
                     if (x + self._width > geo.x() and x < geo.right() and
                             y + self._height > geo.y() and y < geo.bottom()):
                         self.move(x, y)
                         return
-                else:
-                    self.move(x, y)
-                    return
         except Exception:
             pass
         self._position_on_screen()
@@ -174,33 +186,59 @@ class _IndicatorWindow(QWidget):
         self._level_history.append(self._current_level)
         self._scroll_offset += 0.15
 
+        # Periodically re-raise to stay on top of all windows
+        self._frame_count += 1
+        if self._frame_count % 60 == 0:
+            self.raise_()
+
         self.update()
 
     # ── drag + click-to-close ──────────────────────────────────────────
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            if self._minimize_rect.contains(pos):
+                self._clicked_minimize = True
+                event.accept()
+                return
+            self._clicked_minimize = False
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._is_dragging = True
             self._previous_focus_window = self._get_foreground_window()
             event.accept()
 
     def mouseMoveEvent(self, event):
+        # Track hover over minimize button
+        hover = self._minimize_rect.contains(event.position())
+        if hover != self._minimize_hover:
+            self._minimize_hover = hover
+            self.update()
         if self._is_dragging and self._drag_pos is not None:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        if self._is_dragging:
-            self._is_dragging = False
-            self._drag_pos = None
-            # Any left-button release (click or drag) closes the visualizer
-            try:
-                sys.stdout.write('{"type":"leftclick"}\n')
-                sys.stdout.flush()
-            except OSError:
-                pass
-            event.accept()
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._clicked_minimize:
+                self._clicked_minimize = False
+                try:
+                    sys.stdout.write('{"type":"minimize"}\n')
+                    sys.stdout.flush()
+                except OSError:
+                    pass
+                event.accept()
+                return
+            if self._is_dragging:
+                self._is_dragging = False
+                self._drag_pos = None
+                self._save_position()
+                try:
+                    sys.stdout.write('{"type":"leftclick"}\n')
+                    sys.stdout.flush()
+                except OSError:
+                    pass
+                event.accept()
 
     def _get_foreground_window(self):
         try:
@@ -250,7 +288,7 @@ class _IndicatorWindow(QWidget):
 
         # 2. Opaque background under the waveform bars so they stay
         #    clearly visible at any opacity setting.
-        bars_bg = QColor(15, 15, 25, 255)
+        bars_bg = QColor(15, 15, 25, min(255, self._bg_alpha + 20))
         painter.setBrush(bars_bg)
         painter.setPen(Qt.PenStyle.NoPen)
         bars_area_h = 48
@@ -272,6 +310,18 @@ class _IndicatorWindow(QWidget):
             painter.setPen(self._sub_color)
             sw = metrics.horizontalAdvance(self._sub_text)
             painter.drawText((w - sw) // 2, h - 12, self._sub_text)
+
+        # Minimize button (top-right corner)
+        btn_color = QColor(120, 120, 140, 200) if self._minimize_hover else QColor(80, 80, 100, 140)
+        painter.setBrush(btn_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(self._minimize_rect)
+        # Draw "−" line
+        line_color = QColor(220, 220, 220) if self._minimize_hover else QColor(160, 160, 170)
+        painter.setPen(QPen(line_color, 1.5))
+        cx = self._minimize_rect.center().x()
+        cy = self._minimize_rect.center().y()
+        painter.drawLine(int(cx - 4), int(cy), int(cx + 4), int(cy))
 
         painter.end()
 

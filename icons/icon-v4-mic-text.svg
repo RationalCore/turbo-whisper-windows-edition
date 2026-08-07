@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <circle cx="128" cy="128" r="120" fill="url(#bg4)" stroke="#84cc16" stroke-width="3" stroke-opacity="0.3"/>
+  <!-- Microphone (left side) -->
+  <rect x="75" y="75" width="30" height="55" rx="15" fill="#84cc16"/>
+  <path d="M62 122 Q62 150 90 150 Q118 150 118 122" fill="none" stroke="#84cc16" stroke-width="3" stroke-linecap="round"/>
+  <line x1="90" y1="150" x2="90" y2="165" stroke="#84cc16" stroke-width="3" stroke-linecap="round"/>
+  <line x1="75" y1="165" x2="105" y2="165" stroke="#84cc16" stroke-width="3" stroke-linecap="round"/>
+  <!-- Document/text lines (right side) -->
+  <rect x="135" y="75" width="60" height="4" rx="2" fill="#84cc16" opacity="0.8"/>
+  <rect x="135" y="87" width="55" height="4" rx="2" fill="#84cc16" opacity="0.6"/>
+  <rect x="135" y="99" width="60" height="4" rx="2" fill="#84cc16" opacity="0.8"/>
+  <rect x="135" y="111" width="45" height="4" rx="2" fill="#84cc16" opacity="0.6"/>
+  <rect x="135" y="123" width="60" height="4" rx="2" fill="#84cc16" opacity="0.8"/>
+  <rect x="135" y="135" width="50" height="4" rx="2" fill="#84cc16" opacity="0.6"/>
+  <!-- Arrow from mic to text -->
+  <path d="M115 110 L130 110" fill="none" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.5" stroke-dasharray="3,3"/>
+  <polygon points="130,106 138,110 130,114" fill="#84cc16" opacity="0.5"/>
+  <!-- "Turbo" speed lines -->
+  <line x1="55" y1="95" x2="65" y2="95" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+  <line x1="50" y1="105" x2="62" y2="105" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.25"/>
+  <line x1="55" y1="115" x2="65" y2="115" stroke="#84cc16" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+</svg>

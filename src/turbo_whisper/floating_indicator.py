@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QProcess
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QLinearGradient
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QLinearGradient, QGuiApplication
 from PyQt6.QtWidgets import QWidget
 
 logger = logging.getLogger("turbo_whisper.indicator")
@@ -129,16 +129,13 @@ class FloatingIndicator(QWidget):
                     pos = json.load(f)
                 x = pos.get("x", 100)
                 y = pos.get("y", 100)
-                screen = self.screen()
-                if screen:
+                # Check if position is visible on ANY connected screen
+                for screen in QGuiApplication.screens():
                     geo = screen.geometry()
                     if (x + self._width > geo.x() and x < geo.right() and
                             y + self._height > geo.y() and y < geo.bottom()):
                         self.move(x, y)
                         return
-                else:
-                    self.move(x, y)
-                    return
         except Exception:
             pass
         self._position_on_screen()
@@ -361,6 +358,8 @@ class FloatingIndicatorProcess:
 
         self._on_left_click = None
 
+        self._on_minimize = None
+
         self._hotkey_str = hotkey_str
         self._proc = QProcess()
 
@@ -407,6 +406,13 @@ class FloatingIndicatorProcess:
     def stop(self):
         self._send({"type": "hide"})
 
+    def show(self):
+        """Show the indicator window (if subprocess is running)."""
+        if self._proc.state() == QProcess.ProcessState.Running:
+            self._send({"type": "show"})
+        else:
+            self.start()
+
     def update_level(self, level: float):
         self._send({"type": "level", "value": level})
 
@@ -423,7 +429,7 @@ class FloatingIndicatorProcess:
         self._send({"type": "recording", "active": active})
 
     def set_opacity(self, value: int):
-        """Set visualizer window opacity (30-255, 255=opaque)."""
+        """Set visualizer window opacity (15-255, 255=opaque)."""
         self._send({"type": "opacity", "value": value})
 
     def set_idle(self):
@@ -464,6 +470,8 @@ class FloatingIndicatorProcess:
                     self._on_right_click()
                 elif t == "leftclick" and self._on_left_click:
                     self._on_left_click()
+                elif t == "minimize" and self._on_minimize:
+                    self._on_minimize()
             except json.JSONDecodeError:
                 pass
 
