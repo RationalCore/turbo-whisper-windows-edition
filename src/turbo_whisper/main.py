@@ -38,6 +38,10 @@ def _load_hallucination_patterns() -> list[str]:
     # Filter out single-letter patterns (useless for exact match)
     patterns = [p for p in patterns if len(p.strip()) > 2 or p.strip() == "субтитр"]
 
+    # Remove patterns that users might actually say (not real hallucinations)
+    _remove = {"Поехали!", "Поехали."}
+    patterns = [p for p in patterns if p not in _remove]
+
     # Additional Russian-specific hallucination patterns
     ru_patterns = [
         "ВЕСЕЛАЯ МУЗЫКА", "СПОКОЙНАЯ МУЗЫКА", "ГРУСТНАЯ МЕЛОДИЯ",
@@ -2562,7 +2566,7 @@ class TurboWhisper:
 
     def _apply_all_settings(self) -> None:
         """Apply all loaded config settings to the running app."""
-        # Opacity — send multiple times to ensure subprocess receives it
+        # Opacity
         self._floating_indicator.set_opacity(self.config.indicator_opacity)
         # Streaming mode state in tray
         if hasattr(self, 'streaming_action'):
@@ -2576,9 +2580,9 @@ class TurboWhisper:
             self.hotkey_manager.start()
         # Start floating indicator (always visible)
         self._floating_indicator.start()
-        # Apply settings with staggered delays to ensure subprocess receives them
-        QTimer.singleShot(500, self._apply_all_settings)
-        QTimer.singleShot(1500, self._apply_all_settings)
+        # Apply settings with multiple retries — subprocess needs time to init stdin reader
+        for delay in (500, 1500, 3000, 5000):
+            QTimer.singleShot(delay, self._apply_all_settings)
         # Check API key
         self._check_api_key()
         # Start background microphone for visual feedback

@@ -1,8 +1,82 @@
 """Auto-type functionality - cross-platform using clipboard paste (Ctrl+V/Cmd+V) or character typing."""
 
+import ctypes
+import ctypes.wintypes
 import logging
 import platform
 import shutil
+
+# ── SendInput structures (properly aligned for x64) ───────────────────────
+ULONG_PTR = ctypes.c_size_t  # pointer-sized unsigned integer
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.wintypes.WORD),
+        ("wScan", ctypes.wintypes.WORD),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.wintypes.DWORD),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", ctypes.wintypes.DWORD),
+        ("wParamL", ctypes.wintypes.WORD),
+        ("wParamH", ctypes.wintypes.WORD),
+    ]
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [
+        ("mi", _MOUSEINPUT),
+        ("ki", _KEYBDINPUT),
+        ("hi", _HARDWAREINPUT),
+    ]
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.wintypes.DWORD),
+        ("union", _INPUT_UNION),
+    ]
+
+def _make_scancode_input(scan_code: int, flags: int = 0) -> _INPUT:
+    """Create an INPUT structure for a scan code key event."""
+    inp = _INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.union.ki.wScan = scan_code
+    inp.union.ki.dwFlags = flags | KEYEVENTF_SCANCODE
+    return inp
+
+def _make_key_input(vk: int, scan_code: int, flags: int = 0) -> _INPUT:
+    """Create an INPUT structure for a virtual key + scan code event."""
+    inp = _INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.union.ki.wVk = vk
+    inp.union.ki.wScan = scan_code
+    inp.union.ki.dwFlags = flags
+    return inp
+
+KEYEVENTF_UNICODE = 0x0004
+
+def _make_unicode_input(char_code: int, flags: int = 0) -> _INPUT:
+    """Create an INPUT structure for a Unicode character event."""
+    inp = _INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.union.ki.wScan = char_code
+    inp.union.ki.dwFlags = flags | KEYEVENTF_UNICODE
+    return inp
 import subprocess
 import time
 
@@ -259,7 +333,9 @@ class Typer:
                 logger.info("_type_clipboard_paste: console window detected, using WM_CHAR method")
                 result = self._paste_to_console(text)
             else:
-                result = self._simulate_paste_windows()
+                # Use SendInput with KEYEVENTF_unicode — works regardless of keyboard layout
+                # and for all apps including CodeShellManager
+                result = self._send_unicode_text(text)
             logger.info(f"_type_clipboard_paste: Windows paste -> {result}")
         elif self.system == "Darwin":
             result = self._simulate_paste_macos()
@@ -276,6 +352,85 @@ class Typer:
             logger.info(f"_type_clipboard_paste: restored original clipboard content -> {restore_ok}")
 
         return result
+
+    def _send_unicode_text(self, text: str) -> bool:
+        """Send text using SendInput with KEYEVENTF_unicode.
+
+        Bypasses keyboard layout entirely — sends WM_CHAR messages with
+        correct Unicode character codes. Works for terminals like CodeShellManager
+        that don't respond to Ctrl+V when non-English layout is active.
+        """
+        import ctypes
+        import ctypes.wintypes
+        import time
+
+        user32 = ctypes.windll.user32
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+
+        ULONG_PTR = ctypes.c_size_t
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", ctypes.wintypes.WORD),
+                ("wScan", ctypes.wintypes.WORD),
+                ("dwFlags", ctypes.wintypes.DWORD),
+                ("time", ctypes.wintypes.DWORD),
+                ("dwExtraInfo", ULONG_PTR),
+            ]
+
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", ctypes.c_long),
+                ("dy", ctypes.c_long),
+                ("mouseData", ctypes.wintypes.DWORD),
+                ("dwFlags", ctypes.wintypes.DWORD),
+                ("time", ctypes.wintypes.DWORD),
+                ("dwExtraInfo", ULONG_PTR),
+            ]
+
+        class HARDWAREINPUT(ctypes.Structure):
+            _fields_ = [
+                ("uMsg", ctypes.wintypes.DWORD),
+                ("wParamL", ctypes.wintypes.WORD),
+                ("wParamH", ctypes.wintypes.WORD),
+            ]
+
+        class INPUT_UNION(ctypes.Union):
+            _fields_ = [
+                ("mi", MOUSEINPUT),
+                ("ki", KEYBDINPUT),
+                ("hi", HARDWAREINPUT),
+            ]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.wintypes.DWORD),
+                ("union", INPUT_UNION),
+            ]
+
+        def make_unicode_input(char_code, flags=0):
+            inp = INPUT()
+            inp.type = INPUT_KEYBOARD
+            inp.union.ki.wScan = char_code
+            inp.union.ki.dwFlags = flags | KEYEVENTF_UNICODE
+            return inp
+
+        logger.info(f"_send_unicode_text: sending {len(text)} chars via KEYEVENTF_unicode")
+
+        # Build input array: down+up for each character
+        inputs = []
+        for ch in text:
+            code = ord(ch)
+            inputs.append(make_unicode_input(code, 0))
+            inputs.append(make_unicode_input(code, KEYEVENTF_KEYUP))
+
+        n = len(inputs)
+        arr = (INPUT * n)(*inputs)
+        sent = user32.SendInput(n, ctypes.byref(arr), ctypes.sizeof(INPUT))
+        logger.info(f"_send_unicode_text: sent {sent}/{n} events")
+        return sent > 0
 
     def set_target_window(self, hwnd: int) -> None:
         """Set the target window handle for paste operations.
@@ -297,6 +452,7 @@ class Typer:
                 logger.info(f"set_target_window: saved hwnd={hwnd}, title='{self._target_title[:60]}'")
 
                 # Detect console windows (CMD, PowerShell, Windows Terminal)
+                # NOTE: CodeShellManager is NOT a console window — it uses _simulate_paste_windows
                 class_buf = ctypes.create_unicode_buffer(256)
                 user32.GetClassNameW(hwnd, class_buf, 256)
                 class_name = class_buf.value
@@ -327,7 +483,8 @@ class Typer:
             class_name = buffer.value
             if class_name in ('Edit', 'RichEdit20W', 'RichEdit50W', 'TextBox',
                               'RICHEDIT', 'RICHEDIT50W', 'WindowsForms10.EDIT.app.0.378734a',
-                              'Scintilla'):
+                              'Scintilla', 'ConsoleWindowClass', 'TermControl',
+                              'Windows.UI.Input.InputSite.Window', 'Console'):
                 return child
             # Recurse into children
             deeper = self._find_edit_control(child, user32)
@@ -381,70 +538,71 @@ class Typer:
         logger.info("_simulate_paste_windows: sleeping 0.3s for clipboard to settle")
         time.sleep(0.3)
 
-        # ----------------------------------------------------------------
-        # Method 1: AttachThreadInput + SetForegroundWindow + SendInput
-        # with KEYEVENTF_SCANCODE (layout-independent physical key presses)
-        # ----------------------------------------------------------------
-        old_foreground = 0
+        # Bring target window to foreground
+        current_tid = kernel32.GetCurrentThreadId()
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        attached = False
         try:
-            # Save current foreground window for later restoration
-            old_foreground = user32.GetForegroundWindow()
-
-            # Get thread IDs
-            current_tid = kernel32.GetCurrentThreadId()
-            target_tid = user32.GetWindowThreadProcessId(hwnd, None)
-            old_foreground_tid = 0
-            if old_foreground and old_foreground != hwnd:
-                old_foreground_tid = user32.GetWindowThreadProcessId(old_foreground, None)
-
-            # Attach our thread to target window's input thread
-            # This allows SetForegroundWindow to work cross-process
             if current_tid != target_tid:
                 user32.AttachThreadInput(current_tid, target_tid, True)
-
-            # Also attach to old foreground's thread to properly restore later
-            if old_foreground_tid and old_foreground_tid not in (current_tid, target_tid):
-                user32.AttachThreadInput(current_tid, old_foreground_tid, True)
-
-            # Bring target window to foreground
+                attached = True
             user32.SetForegroundWindow(hwnd)
             user32.BringWindowToTop(hwnd)
-            # Only restore if minimized — avoid normalizing the window
             if user32.IsIconic(hwnd):
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.ShowWindow(hwnd, 9)
+            time.sleep(0.15)
+            logger.info(f"_simulate_paste_windows: brought hwnd={hwnd} to foreground")
+        except Exception as e:
+            logger.warning(f"_simulate_paste_windows: SetForegroundWindow failed: {e}")
 
+        # System-wide layout switch + Ctrl+V
+        SC_CONTROL = 0x1D
+        SC_V = 0x2F
+        layout_switched = False
+        original_input_hkl = ctypes.c_uint()
+
+        try:
+            user32.SystemParametersInfoW(0x0059, 0, ctypes.byref(original_input_hkl), 0)
+            logger.info(f"_simulate_paste_windows: system layout={original_input_hkl.value:#x}")
+
+            if original_input_hkl.value & 0xFFFF != 0x0409:
+                hkl_en = ctypes.c_uint(0x04090409)
+                ok = user32.SystemParametersInfoW(0x005A, 0, hkl_en, 0x0001 | 0x0002)
+                if ok:
+                    layout_switched = True
+                    time.sleep(0.3)
+                    logger.info("_simulate_paste_windows: switched SYSTEM layout to English")
+                else:
+                    logger.warning("_simulate_paste_windows: SystemParametersInfoW failed")
+
+            logger.info("_simulate_paste_windows: sending keybd_event Ctrl+V")
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, 0, 0)
+            time.sleep(0.05)
+            user32.keybd_event(VK_V, SC_V, 0, 0)
+            time.sleep(0.05)
+            user32.keybd_event(VK_V, SC_V, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.05)
+            user32.keybd_event(VK_CONTROL, SC_CONTROL, KEYEVENTF_KEYUP, 0)
             time.sleep(0.1)
-
-            # Send Ctrl+V via keybd_event with explicit scan codes
-            # Scan codes are physical key positions — work regardless of keyboard layout
-            SC_CONTROL = 0x1D  # Left Ctrl scan code
-            SC_V = 0x2F        # V key scan code
-            logger.info("_simulate_paste_windows: method 1 - keybd_event Ctrl+V (scan codes)")
-            user32.keybd_event(VK_CONTROL, SC_CONTROL, 0, 0)        # Ctrl down
-            time.sleep(0.05)
-            user32.keybd_event(VK_V, SC_V, 0, 0)                    # V down
-            time.sleep(0.05)
-            user32.keybd_event(VK_V, SC_V, KEYEVENTF_KEYUP, 0)      # V up
-            time.sleep(0.05)
-            user32.keybd_event(VK_CONTROL, SC_CONTROL, KEYEVENTF_KEYUP, 0)  # Ctrl up
-            time.sleep(0.1)
-
-            logger.info("_simulate_paste_windows: keybd_event Ctrl+V sent successfully")
+            logger.info("_simulate_paste_windows: keybd_event sent")
             return True
 
         except Exception as e:
-            logger.error(f"_simulate_paste_windows: method 1 failed: {e}")
+            logger.error(f"_simulate_paste_windows: failed: {e}")
 
         finally:
-            # Detach threads
-            try:
-                current_tid = kernel32.GetCurrentThreadId()
-                if old_foreground_tid and old_foreground_tid != current_tid:
-                    user32.AttachThreadInput(current_tid, old_foreground_tid, False)
-                if target_tid and target_tid != current_tid:
+            if layout_switched:
+                try:
+                    orig = ctypes.c_uint(original_input_hkl.value)
+                    user32.SystemParametersInfoW(0x005A, 0, orig, 0x0001 | 0x0002)
+                    logger.info("_simulate_paste_windows: restored SYSTEM layout")
+                except Exception:
+                    pass
+            if attached:
+                try:
                     user32.AttachThreadInput(current_tid, target_tid, False)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         # ----------------------------------------------------------------
         # Method 2: PostMessage WM_PASTE to saved edit child (if available)
@@ -472,6 +630,19 @@ class Typer:
                         return True
             except Exception as e:
                 logger.error("_simulate_paste_windows: method 2 failed: %s", e)
+
+        # ----------------------------------------------------------------
+        # Method 2.5: SendMessage WM_PASTE to main window (for terminals)
+        # SendMessage is synchronous — waits for the message to be processed
+        # ----------------------------------------------------------------
+        try:
+            logger.info("_simulate_paste_windows: method 2.5 - SendMessage WM_PASTE to main hwnd=%d", hwnd)
+            result = user32.SendMessageW(hwnd, 0x0302, 0, 0)  # WM_PASTE
+            logger.info(f"_simulate_paste_windows: SendMessage WM_PASTE returned {result}")
+            time.sleep(0.2)
+            return True  # Always return True — we can't know if it actually worked
+        except Exception as e:
+            logger.error(f"_simulate_paste_windows: method 2.5 failed: {e}")
 
         # ----------------------------------------------------------------
         # Method 3: SendInput (may be blocked by UIPI but works for same-integrity)
@@ -554,11 +725,77 @@ class Typer:
         logger.error("_simulate_paste_windows: ALL METHODS FAILED")
         return False
 
+    def _type_text_via_keybd(self, text: str) -> bool:
+        """Type text character by character using keybd_event.
+
+        Works for terminals and apps that don't respond to Ctrl+V paste.
+        Uses VkKeyScanW with English layout for correct key mapping.
+        NOTE: Window must already be in foreground. Does NOT use AttachThreadInput.
+        """
+        import ctypes
+        import time
+
+        user32 = ctypes.windll.user32
+        KEYEVENTF_KEYUP = 0x0002
+
+        logger.info(f"_type_text_via_keybd: typing {len(text)} chars")
+
+        # Switch keyboard layout to English for correct VkKeyScanW mapping
+        HKL_ENGLISH = 0x04090409
+        original_hkl = user32.GetKeyboardLayout(0)
+        if original_hkl & 0xFFFF != 0x0409:
+            # Activate English layout for current thread
+            user32.ActivateKeyboardLayout(HKL_ENGLISH, 0)
+            time.sleep(0.02)
+
+        try:
+            for char in text:
+                # Get virtual key code for this character (now uses English layout)
+                vk_full = user32.VkKeyScanW(ord(char))
+                vk = vk_full & 0xFF
+                if vk == 0xFF:
+                    # Character has no direct key — skip
+                    logger.debug(f"_type_text_via_keybd: no key for '{char}', skipping")
+                    continue
+
+                # Check if shift is needed (VkKeyScanW high byte)
+                need_shift = (vk_full >> 8) & 1
+
+                # Get scan code from virtual key
+                scan = user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
+
+                if need_shift:
+                    user32.keybd_event(0x10, 0x2A, 0, 0)  # Shift down
+
+                user32.keybd_event(vk, scan, 0, 0)      # key down
+                user32.keybd_event(vk, scan, KEYEVENTF_KEYUP, 0)  # key up
+
+                if need_shift:
+                    user32.keybd_event(0x10, 0x2A, KEYEVENTF_KEYUP, 0)  # Shift up
+
+                time.sleep(0.005)
+
+            logger.info(f"_type_text_via_keybd: typed {len(text)} chars successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"_type_text_via_keybd: failed: {e}")
+            return False
+
+        finally:
+            # Restore original keyboard layout
+            if original_hkl & 0xFFFF != 0x0409:
+                try:
+                    user32.ActivateKeyboardLayout(original_hkl, 0)
+                except Exception:
+                    pass
+
     def _paste_to_console(self, text: str) -> bool:
         """Paste text to console window (CMD, PowerShell) with fallback methods.
 
         Console windows don't support Ctrl+V paste reliably.
-        Tries multiple methods: PostMessage WM_CHAR, SendInput, keybd_event.
+        Tries multiple methods: SendMessage WM_CHAR, WM_KEYDOWN/UP.
+        Switches keyboard layout to English before paste, restores in finally.
         """
         import ctypes
         import ctypes.wintypes
@@ -572,19 +809,71 @@ class Typer:
             logger.warning("_paste_to_console: no window handle")
             return False
 
-        logger.info(f"_paste_to_console: sending {len(text)} chars to hwnd={hwnd}")
+        # System-wide layout switch — restore in finally no matter what
+        layout_was_switched = False
+        original_input_hkl = ctypes.c_uint()
 
-        # Method 1: Try PostMessage WM_CHAR
-        success_count = 0
-        for char in text:
-            result = user32.PostMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
-            if result != 0:
-                success_count += 1
-            time.sleep(0.005)
+        try:
+            user32.SystemParametersInfoW(0x0059, 0, ctypes.byref(original_input_hkl), 0)
+            if original_input_hkl.value & 0xFFFF != 0x0409:
+                hkl_en = ctypes.c_uint(0x04090409)
+                if user32.SystemParametersInfoW(0x005A, 0, hkl_en, 0x0001 | 0x0002):
+                    layout_was_switched = True
+                    time.sleep(0.3)
+                    logger.info("_paste_to_console: switched SYSTEM layout to English")
 
-        if success_count > len(text) * 0.5:
-            logger.info(f"_paste_to_console: PostMessageW succeeded for {success_count}/{len(text)} chars")
+            # Try edit child first, then fall back to main window
+            target_hwnd = self._target_edit_hwnd if self._target_edit_hwnd else hwnd
+            logger.info(f"_paste_to_console: sending {len(text)} chars to hwnd={target_hwnd}")
+
+            # Method 1: Try SendMessage WM_CHAR (synchronous — works for some terminals)
+            success_count = 0
+            for char in text:
+                result = user32.SendMessageW(target_hwnd, 0x0102, ord(char), 0)  # WM_CHAR
+                success_count += 1  # SendMessage always returns
+                time.sleep(0.005)
+
+            logger.info(f"_paste_to_console: SendMessageW sent {success_count}/{len(text)} chars")
+
+            # If edit child failed, try main window
+            if target_hwnd != hwnd:
+                logger.info("_paste_to_console: trying main window with SendMessage")
+                for char in text:
+                    user32.SendMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
+                    time.sleep(0.005)
+
+            # Also try WM_KEYDOWN/WM_KEYUP for Ctrl+V (some terminals need this)
+            logger.info("_paste_to_console: also sending Ctrl+V via SendMessage WM_KEYDOWN/UP")
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+            lparam_down = (0x00000001 | (0x1D << 16))  # repeat=1, scan code=0x1D
+            lparam_up = (0x00000001 | (0x1D << 16) | (1 << 30) | (1 << 31))  # repeat=1, prev=1, transition=1
+            lparam_v_down = (0x00000001 | (0x2F << 16))
+            lparam_v_up = (0x00000001 | (0x2F << 16) | (1 << 30) | (1 << 31))
+            user32.SendMessageW(target_hwnd, 0x0100, VK_CONTROL, lparam_down)  # WM_KEYDOWN Ctrl
+            time.sleep(0.02)
+            user32.SendMessageW(target_hwnd, 0x0100, VK_V, lparam_v_down)     # WM_KEYDOWN V
+            time.sleep(0.02)
+            user32.SendMessageW(target_hwnd, 0x0101, VK_V, lparam_v_up)       # WM_KEYUP V
+            time.sleep(0.02)
+            user32.SendMessageW(target_hwnd, 0x0101, VK_CONTROL, lparam_up)   # WM_KEYUP Ctrl
+            time.sleep(0.1)
+
             return True
+
+        except Exception as e:
+            logger.error(f"_paste_to_console: failed: {e}")
+            return False
+
+        finally:
+            # ALWAYS restore keyboard layout for the target thread
+            if layout_was_switched and layout_target_tid:
+                try:
+                    orig = ctypes.c_uint(original_input_hkl.value)
+                    user32.SystemParametersInfoW(0x005A, 0, orig, 0x0001 | 0x0002)
+                    logger.info("_paste_to_console: restored SYSTEM layout")
+                except Exception:
+                    pass
 
         # Method 2: Try SendInput with keybd_event for each character
         logger.info("_paste_to_console: PostMessageW failed, trying SendInput method")
@@ -648,9 +937,42 @@ class Typer:
             return True
 
         except Exception as e:
-            logger.error(f"_paste_to_console: SendInput failed: {e}")
+            logger.error(f"_paste_to_console: keybd_event with scan codes failed: {e}")
 
-        # Method 3: Try character typing as last resort
+        # Method 3: Try keybd_event with scan code 0 (auto-generated)
+        # Some apps don't support explicit scan codes
+        logger.info("_paste_to_console: trying keybd_event with scan code 0")
+        try:
+            old_fg = user32.GetForegroundWindow()
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.05)
+
+            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_V, 0, 0, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.02)
+            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.1)
+
+            if old_fg and old_fg != hwnd:
+                user32.SetForegroundWindow(old_fg)
+
+            # Restore clipboard
+            try:
+                import pyperclip
+                pyperclip.copy(old_clipboard)
+            except Exception:
+                pass
+
+            logger.info("_paste_to_console: keybd_event with scan code 0 completed")
+            return True
+
+        except Exception as e:
+            logger.error(f"_paste_to_console: keybd_event with scan code 0 failed: {e}")
+
+        # Method 4: Try character typing as last resort
         logger.info("_paste_to_console: trying character typing fallback")
         try:
             for char in text:
