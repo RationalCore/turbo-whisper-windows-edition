@@ -5,11 +5,11 @@ setlocal enabledelayedexpansion
 
 set "PROJECT_DIR=%~dp0"
 set "BUILD_SPEC=%PROJECT_DIR%build_exe_compat.spec"
-set "DIST_DIR=%PROJECT_DIR%dist\TurboWhisper"
+set "DIST_DIR=%PROJECT_DIR%dist"
 
 echo ============================================
-echo  TurboWhisper - Compatibility Build
-echo  (no compression, no packing)
+echo  TurboWhisper - One-File Build
+echo  (no compression, single exe)
 echo ============================================
 echo.
 
@@ -167,8 +167,8 @@ if exist "%PROJECT_DIR%dist" rmdir /s /q "%PROJECT_DIR%dist" >nul 2>&1
 echo    Done.
 echo.
 
-:: 6. Build (no compression — produces folder, not single exe)
-echo [6/6] Building TurboWhisper (compatibility mode)...
+:: 6. Build (no compression — single exe, no UPX)
+echo [6/6] Building TurboWhisper (one-file mode)...
 ".venv\Scripts\python.exe" -m PyInstaller --clean "%BUILD_SPEC%"
 if %ERRORLEVEL% NEQ 0 (
     echo [!] PyInstaller build FAILED!
@@ -180,13 +180,6 @@ if not exist "%DIST_DIR%\TurboWhisper.exe" (
     goto :error
 )
 
-:: Calculate total folder size
-set "TOTAL_SIZE=0"
-for /r "%DIST_DIR%" %%F in (*) do (
-    set /a "TOTAL_SIZE+=%%~zF"
-)
-set /a "TOTAL_MB=!TOTAL_SIZE! / 1048576"
-
 for %%I in ("%DIST_DIR%\TurboWhisper.exe") do set "EXE_SIZE=%%~zI"
 set /a "EXE_MB=!EXE_SIZE! / 1048576"
 
@@ -196,12 +189,10 @@ echo  Build SUCCESSFUL!
 echo ============================================
 echo.
 echo  Output:    %DIST_DIR%\TurboWhisper.exe
-echo  Exe size:  !EXE_MB! MB
-echo  Total:     !TOTAL_MB! MB (uncompressed folder)
-echo  Mode:      Compatibility (no packing)
+echo  Size:      !EXE_MB! MB
+echo  Mode:      One-file (all dependencies inside)
 echo.
-echo  NOTE: Distribute the entire TurboWhisper folder,
-echo        not just the .exe file.
+echo  NOTE: Single .exe file, no extra folders needed.
 echo.
 goto :end
 
