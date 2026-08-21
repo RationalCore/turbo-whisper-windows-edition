@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,9 @@ def _load_hallucination_patterns() -> list[str]:
         "Смотрите продолжение в 4 части видео.",
         "Смотрите продолжение в следующей серии...",
         "Смотрите продолжение во второй части.",
+        "Продолжение следует",
+        "Продолжение следует...",
+        "Спасибо.",
         "ПОДПИШИСЬ НА КАНАЛ", "ПОДПИШИСЬ!", "ПОДПИШИСЬ",
         "Поехали!", "Поехали.",
         "Девушки отдыхают...",
@@ -85,30 +89,89 @@ def _load_hallucination_patterns() -> list[str]:
 _HALLUCINATION_PATTERNS = _load_hallucination_patterns()
 
 
-def _is_hallucination(text: str) -> bool:
-    """Check if text is a hallucination/artifact from the speech model.
+def _has_words(text: str) -> bool:
+    """Check if text contains at least one word character (letters/digits)."""
+    return bool(re.search(r'[\w\u0400-\u04FF\u00C0-\u024F]', text))
 
-    Strips trailing punctuation before comparing so that e.g.
-    'Продолжение следует.' matches the pattern 'Продолжение следует...'
-    Also filters very short texts (1 word or very short) that are usually hallucinated.
+
+def _clean_hallucination(text: str) -> str | None:
+    """Strip hallucination prefixes/suffixes from text, return cleaned text or None if pure hallucination.
+
+    Whisper sometimes prepends/appends hallucination text to real speech, e.g.
+    'Продолжение следует... Один. Два.' should become 'Один. Два.'
+    Pure hallucinations like 'Продолжение следует...' return None.
     """
-    text_stripped = text.strip(_PUNCTUATION_TRIM)
-    text_lower = text_stripped.lower()
+    log = logging.getLogger("turbo_whisper")
+    text_lower = text.strip().lower()
+    text_stripped = text.strip(_PUNCTUATION_TRIM).lower()
+
+    # Empty or whitespace-only
+    if not text_stripped:
+        return None
 
     # Filter single words shorter than 5 chars (usually noise artifacts)
     if len(text_stripped) < 5 and " " not in text_stripped:
-        return True
+        return None
 
-    # Special case: substring check for 'субтитр' derivatives
-    if "субтитр" in text_lower:
-        return True
+    # Special case: substring check for 'субтитр' derivatives — always pure hallucination
+    if "субтитр" in text_stripped:
+        return None
 
-    # All other patterns: exact match (case-insensitive), trimmed same way
+    # Exact match — pure hallucination (compare after stripping punctuation from both)
     for pattern in _HALLUCINATION_PATTERNS:
-        if pattern.strip(_PUNCTUATION_TRIM).lower() == text_lower:
-            return True
+        p = pattern.strip(_PUNCTUATION_TRIM).lower()
+        if p == text_stripped:
+            return None
 
-    return False
+    # Substring match: use original pattern (with punctuation) to avoid
+    # false positives like "Продолжение следует за главным героем"
+    # Only use patterns that END with punctuation (dots, !, ?, etc.)
+    # to avoid stripping real speech phrases.
+    _BOUNDARY_CHARS = set(".,!\u2026\u2014\u2013:;)")
+    for pattern in _HALLUCINATION_PATTERNS:
+        p_orig = pattern.strip().lower()
+        if len(p_orig) < 5:
+            continue
+        if p_orig[-1] not in _BOUNDARY_CHARS:
+            continue
+
+        # Hallucination at start: "Продолжение следует... Один. Два." → "Один. Два."
+        if text_lower.startswith(p_orig):
+            remainder = text[len(p_orig):].strip()
+            if not remainder or not _has_words(remainder):
+                log.info(f"hallucination: filtered prefix '{p_orig}' → None (remainder='{remainder}')")
+                return None
+            log.info(f"hallucination: stripped prefix '{p_orig}' → '{remainder[:60]}'")
+            return remainder
+
+        # Hallucination at end: "Один. Два. Продолжение следует..." → "Один. Два."
+        if text_lower.endswith(p_orig):
+            remainder = text[:len(text) - len(p_orig)].strip()
+            if not remainder or not _has_words(remainder):
+                log.info(f"hallucination: filtered suffix '{p_orig}' → None (remainder='{remainder}')")
+                return None
+            log.info(f"hallucination: stripped suffix '{p_orig}' → '{remainder[:60]}'")
+            return remainder
+
+        # Hallucination in middle: "Проверка. Продолжение следует... Два." → "Проверка. Два."
+        idx = text_lower.find(p_orig)
+        if idx > 0:
+            before = text[:idx].strip()
+            after = text[idx + len(p_orig):].strip()
+            parts = [p for p in (before, after) if p and _has_words(p)]
+            if parts:
+                result = " ".join(parts)
+                log.info(f"hallucination: stripped middle '{p_orig}' → '{result[:60]}'")
+                return result
+            log.info(f"hallucination: filtered middle '{p_orig}' → None")
+            return None
+
+    return text  # No hallucination found, return original
+
+
+def _is_hallucination(text: str) -> bool:
+    """Check if text is a hallucination/artifact from the speech model."""
+    return _clean_hallucination(text) is None
 
 # Platform-specific imports for single-instance locking
 if sys.platform == "win32":
@@ -1317,6 +1380,7 @@ class RecordingWindow(QWidget):
     def _apply_settings(self) -> None:
         """Read all UI values and save config immediately."""
         old_hotkey = list(self.config.hotkey)
+        old_auto_start = self.config.auto_start
         # API
         self.config.api_url = self.api_url_input.text()
         self.config.api_key = self._actual_api_key
@@ -1356,7 +1420,8 @@ class RecordingWindow(QWidget):
             self.config.hotkey = new_hotkey
         # Save
         self.config.save()
-        self.config.apply_autostart()
+        if self.config.auto_start != old_auto_start:
+            self.config.apply_autostart()
         # Notify parent if hotkey changed
         if new_hotkey != old_hotkey and hasattr(self, '_on_settings_saved'):
             self._on_settings_saved()
@@ -1646,14 +1711,9 @@ class TurboWhisper:
         self.indicator_action.triggered.connect(self._toggle_indicator)
         menu.addAction(self.indicator_action)
 
-        menu.addSeparator()
-
-        # Start/Stop Recording with hotkey hint
+        # Hidden toggle action (used by setText calls, not shown in menu)
         self.toggle_action = QAction(f"Start Recording ({hotkey_str})", menu)
         self.toggle_action.triggered.connect(self._toggle_recording)
-        menu.addAction(self.toggle_action)
-
-        menu.addSeparator()
 
         # Streaming mode toggle
         self.streaming_action = QAction("Streaming Mode", menu)
@@ -1957,13 +2017,14 @@ class TurboWhisper:
                 self.recorder.start(level_callback=self._on_audio_level)
                 print("_start_recording: recorder started (batch mode)")
             except Exception as e:
-                print(f"[ERROR] Microphone: {e}", file=sys.stderr)
+                logger.error(f"Microphone error: {e}")
                 self.is_recording = False
                 self.toggle_action.setText("Start Recording")
                 self._update_icons(recording=False)
                 self._waveform_timer.stop()
-                self._floating_indicator.set_status("Mic error", "#ef4444", str(e)[:40])
-                self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
+                self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+                self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
+                                        QSystemTrayIcon.MessageIcon.Critical)
 
     def _start_streaming_recording(self) -> None:
         """Start recording in streaming mode with time-based chunking."""
@@ -2005,15 +2066,15 @@ class TurboWhisper:
             self._floating_indicator.start()
         except Exception as e:
             logger.error(f"Streaming recording FAILED: {e}")
-            print(f"[ERROR] Streaming recording: {e}", file=sys.stderr)
             self.is_recording = False
             self.toggle_action.setText("Start Recording")
             self._update_icons(recording=False)
             self._waveform_timer.stop()
             self._chunk_order_timer.stop()
             self.window.hide()
-            self._floating_indicator.set_status("Mic error", "#ef4444", str(e)[:40])
-            self._show_notification("Turbo Whisper", f"Microphone error: {e}", QSystemTrayIcon.MessageIcon.Critical)
+            self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+            self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
+                                    QSystemTrayIcon.MessageIcon.Critical)
 
     def _on_auto_stop(self) -> None:
         """Called when auto-stop timeout is reached (no speech detected)."""
@@ -2048,12 +2109,12 @@ class TurboWhisper:
                 self._chunk_queue.put(_seq)
             except Exception as e:
                 logger.error(f"transcribe_chunk #{_seq}: API FAILED: {e}")
-                print(f"[ERROR] Chunk #{_seq}: {e}", file=sys.stderr)
                 self._chunk_results[_seq] = None
                 self._chunk_queue.put(_seq)
-                # Fatal errors (401, 403, 404) — stop recording immediately
+                # Fatal errors (401, 403, 404, 405) — stop recording immediately
                 err_str = str(e)
-                if any(code in err_str for code in ("401", "403", "Unauthorized", "Access denied")):
+                if any(code in err_str for code in ("401", "403", "404", "405",
+                                                    "Unauthorized", "Access denied")):
                     logger.error(f"transcribe_chunk #{_seq}: fatal error, stopping recording")
                     self.signals.transcription_error.emit(err_str)
 
@@ -2153,9 +2214,11 @@ class TurboWhisper:
 
             # Filter out common model artifacts
             text = text.strip()
-            if _is_hallucination(text):
+            cleaned = _clean_hallucination(text)
+            if cleaned is None:
                 logger.debug(f"Chunk #{chunk_seq}: model artifact '{text[:50]}', skipping")
                 continue
+            text = cleaned
 
             logger.info(f"Chunk #{chunk_seq}: typing '{text[:50]}'")
 
@@ -2282,8 +2345,8 @@ class TurboWhisper:
             try:
                 text = self.client.transcribe_sync(remaining_chunk)
                 if text:
-                    clean_text = text.strip()
-                    if not _is_hallucination(clean_text) and clean_text:
+                    clean_text = _clean_hallucination(text.strip())
+                    if clean_text:
                         if self.config.auto_paste:
                             self.typer.type_text(clean_text)
                             self._update_insert_time()
@@ -2292,7 +2355,6 @@ class TurboWhisper:
                         logger.info(f"Final chunk transcribed: '{clean_text[:50]}'")
             except Exception as e:
                 logger.error(f"Final chunk failed: {e}")
-                print(f"[ERROR] Final chunk: {e}", file=sys.stderr)
                 self.signals.transcription_error.emit(str(e))
 
         logger.info(f"_stop_streaming_recording: {len(self._pending_chunk_texts)} chunks total")
@@ -2457,9 +2519,9 @@ class TurboWhisper:
             return
 
         # Filter out model artifacts
-        clean_text = text.strip()
-        if _is_hallucination(clean_text):
-            logger.debug(f"Batch mode: model artifact '{clean_text[:50]}', skipping")
+        clean_text = _clean_hallucination(text.strip())
+        if clean_text is None:
+            logger.debug(f"Batch mode: model artifact '{text.strip()[:50]}', skipping")
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
             self._floating_indicator.set_idle()
             return
@@ -2474,9 +2536,9 @@ class TurboWhisper:
 
         if self.config.auto_paste:
             if self._wait_for_claude_ready():
-                print(f"_on_transcription_complete: calling typer.type_text()...")
+                logger.info(f"INSERTING text ({len(clean_text)} chars): '{clean_text[:100]}'")
                 result = self.typer.type_text(clean_text)
-                print(f"_on_transcription_complete: typer.type_text() returned {result}")
+                logger.info(f"typer.type_text returned {result}")
                 self._floating_indicator.set_status("Done!", "#84cc16")
             else:
                 self._floating_indicator.set_status("Copied (Claude busy)", "#f59e0b")
@@ -2490,26 +2552,56 @@ class TurboWhisper:
         self._processing_watchdog.stop()
         logger.error(f"Transcription error: {error}")
 
-        # Print concise error to console (visible in bat launcher)
-        print(f"[ERROR] {error}", file=sys.stderr)
-
-        # Classify error and set persistent indicator status (stays until next action)
-        if "401" in error:
-            self._floating_indicator.set_status("Invalid API key", "#ef4444",
-                "Open settings and enter API key")
-        elif "429" in error or "rate limit" in error.lower():
-            self._floating_indicator.set_status("Rate limited", "#f59e0b",
-                "Try again in a few seconds")
-        elif "timed out" in error.lower() or "timeout" in error.lower():
-            self._floating_indicator.set_status("Request timeout", "#ef4444",
-                "Check internet connection")
-        elif "connect" in error.lower() or "network" in error.lower():
-            self._floating_indicator.set_status("Network error", "#ef4444",
-                "Check internet connection")
+        # Classify error and show user-friendly notification + indicator status
+        error_lower = error.lower()
+        if "401" in error or "unauthorized" in error_lower:
+            msg = "Invalid API key"
+            hint = "Open Settings and check your API key"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
+        elif "403" in error or "access denied" in error_lower:
+            msg = "Access denied"
+            hint = "Check your API key permissions"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
+        elif "404" in error or "not found" in error_lower:
+            msg = "API endpoint not found"
+            hint = "Check API URL in Settings"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
+        elif "405" in error or "method not allowed" in error_lower:
+            msg = "API error"
+            hint = "Check API URL and format in Settings"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
+        elif "429" in error or "rate limit" in error_lower:
+            msg = "Rate limited"
+            hint = "Try again in a few seconds"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 3000)
+            self._floating_indicator.set_status(msg, "#f59e0b", hint)
+        elif "timed out" in error_lower or "timeout" in error_lower:
+            msg = "Request timeout"
+            hint = "Check internet connection"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
+        elif "connect" in error_lower or "network" in error_lower:
+            msg = "Network error"
+            hint = "Check internet connection"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Critical, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
         else:
-            self._floating_indicator.set_status("Transcription error", "#ef4444",
-                error[:40])
-        # Indicator stays in error state until user presses hotkey again (set_idle called on next recording)
+            msg = "Transcription error"
+            hint = "Check logs for details"
+            self._show_notification("Turbo Whisper", f"{msg}. {hint}",
+                                    QSystemTrayIcon.MessageIcon.Warning, 5000)
+            self._floating_indicator.set_status(msg, "#ef4444", hint)
 
     def _quit(self) -> None:
         if self.is_recording or self.is_processing:

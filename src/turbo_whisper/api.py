@@ -55,6 +55,12 @@ class WhisperClient:
 
     def __init__(self, config: Config):
         self.config = config
+        # Use JSON mode for routerai.ru by default; otherwise respect user's config
+        url_lower = config.api_url.lower()
+        if "routerai.ru" in url_lower:
+            self._use_json_api = True
+        else:
+            self._use_json_api = config.use_json_api
 
     def _get_headers(self) -> dict[str, str]:
         """Get common headers."""
@@ -75,11 +81,11 @@ class WhisperClient:
         """
         headers = self._get_headers()
         audio_size = len(audio_data)
-        logger.info(f"Async transcribe start: audio_size={audio_size}B, use_json={self.config.use_json_api}")
+        logger.info(f"Async transcribe start: audio_size={audio_size}B, use_json={self._use_json_api}")
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                if self.config.use_json_api:
+                if self._use_json_api:
                     payload = self._build_json_payload(audio_data)
                     logger.debug(f"JSON payload (without base64 data): model={payload.get('model')}, "
                                  f"format={payload.get('input_audio', {}).get('format')}, "
@@ -134,7 +140,7 @@ class WhisperClient:
         """
         headers = self._get_headers()
         audio_size = len(audio_data)
-        logger.info(f"Sync transcribe start: audio_size={audio_size}B, use_json={self.config.use_json_api}")
+        logger.info(f"Sync transcribe start: audio_size={audio_size}B, use_json={self._use_json_api}")
 
         max_retries = 3
         retry_delay = 2.0  # initial delay in seconds
@@ -142,7 +148,7 @@ class WhisperClient:
         for attempt in range(1, max_retries + 1):
             try:
                 with httpx.Client(timeout=60.0) as client:
-                    if self.config.use_json_api:
+                    if self._use_json_api:
                         payload = self._build_json_payload(audio_data)
                         logger.debug(f"JSON payload (without base64 data): model={payload.get('model')}, "
                                      f"format={payload.get('input_audio', {}).get('format')}, "

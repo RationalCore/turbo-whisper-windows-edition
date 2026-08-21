@@ -279,6 +279,12 @@ class Typer:
         logger.info(f"type_text START: text='{text[:80]}' (len={len(text)}), use_character_typing={self._use_character_typing}")
 
         if self._use_character_typing:
+            # pyautogui.write() can't handle non-ASCII (Cyrillic etc.) — use clipboard paste
+            if any(ord(ch) > 127 for ch in text):
+                logger.info("type_text: non-ASCII detected, using clipboard paste instead of character typing")
+                result = self._type_clipboard_paste(text)
+                logger.info(f"type_text END: clipboard paste returned {result}")
+                return result
             result = self._type_characters(text)
             logger.info(f"type_text END: _type_characters returned {result}")
             return result
@@ -791,200 +797,72 @@ class Typer:
                     pass
 
     def _paste_to_console(self, text: str) -> bool:
-        """Paste text to console window (CMD, PowerShell) with fallback methods.
+        """Paste text to console window via clipboard + Ctrl+V.
 
-        Console windows don't support Ctrl+V paste reliably.
-        Tries multiple methods: SendMessage WM_CHAR, WM_KEYDOWN/UP.
-        Switches keyboard layout to English before paste, restores in finally.
+        Clipboard paste works for all Unicode (Cyrillic, etc.) regardless
+        of the active keyboard layout.
         """
         import ctypes
         import ctypes.wintypes
         import time
 
         user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
 
         hwnd = self._target_hwnd if self._target_hwnd else user32.GetForegroundWindow()
         if not hwnd:
             logger.warning("_paste_to_console: no window handle")
             return False
 
-        # System-wide layout switch — restore in finally no matter what
-        layout_was_switched = False
-        original_input_hkl = ctypes.c_uint()
+        logger.info(f"_paste_to_console: clipboard paste {len(text)} chars to hwnd={hwnd}")
 
-        try:
-            user32.SystemParametersInfoW(0x0059, 0, ctypes.byref(original_input_hkl), 0)
-            if original_input_hkl.value & 0xFFFF != 0x0409:
-                hkl_en = ctypes.c_uint(0x04090409)
-                if user32.SystemParametersInfoW(0x005A, 0, hkl_en, 0x0001 | 0x0002):
-                    layout_was_switched = True
-                    time.sleep(0.3)
-                    logger.info("_paste_to_console: switched SYSTEM layout to English")
-
-            # Try edit child first, then fall back to main window
-            target_hwnd = self._target_edit_hwnd if self._target_edit_hwnd else hwnd
-            logger.info(f"_paste_to_console: sending {len(text)} chars to hwnd={target_hwnd}")
-
-            # Method 1: Try SendMessage WM_CHAR (synchronous — works for some terminals)
-            success_count = 0
-            for char in text:
-                result = user32.SendMessageW(target_hwnd, 0x0102, ord(char), 0)  # WM_CHAR
-                success_count += 1  # SendMessage always returns
-                time.sleep(0.005)
-
-            logger.info(f"_paste_to_console: SendMessageW sent {success_count}/{len(text)} chars")
-
-            # If edit child failed, try main window
-            if target_hwnd != hwnd:
-                logger.info("_paste_to_console: trying main window with SendMessage")
-                for char in text:
-                    user32.SendMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
-                    time.sleep(0.005)
-
-            # Also try WM_KEYDOWN/WM_KEYUP for Ctrl+V (some terminals need this)
-            logger.info("_paste_to_console: also sending Ctrl+V via SendMessage WM_KEYDOWN/UP")
-            VK_CONTROL = 0x11
-            VK_V = 0x56
-            lparam_down = (0x00000001 | (0x1D << 16))  # repeat=1, scan code=0x1D
-            lparam_up = (0x00000001 | (0x1D << 16) | (1 << 30) | (1 << 31))  # repeat=1, prev=1, transition=1
-            lparam_v_down = (0x00000001 | (0x2F << 16))
-            lparam_v_up = (0x00000001 | (0x2F << 16) | (1 << 30) | (1 << 31))
-            user32.SendMessageW(target_hwnd, 0x0100, VK_CONTROL, lparam_down)  # WM_KEYDOWN Ctrl
-            time.sleep(0.02)
-            user32.SendMessageW(target_hwnd, 0x0100, VK_V, lparam_v_down)     # WM_KEYDOWN V
-            time.sleep(0.02)
-            user32.SendMessageW(target_hwnd, 0x0101, VK_V, lparam_v_up)       # WM_KEYUP V
-            time.sleep(0.02)
-            user32.SendMessageW(target_hwnd, 0x0101, VK_CONTROL, lparam_up)   # WM_KEYUP Ctrl
-            time.sleep(0.1)
-
-            return True
-
-        except Exception as e:
-            logger.error(f"_paste_to_console: failed: {e}")
+        # Save and replace clipboard
+        saved = self.get_clipboard_text()
+        if not self.copy_to_clipboard(text):
+            logger.error("_paste_to_console: clipboard copy failed")
             return False
 
-        finally:
-            # ALWAYS restore keyboard layout for the target thread
-            if layout_was_switched and layout_target_tid:
-                try:
-                    orig = ctypes.c_uint(original_input_hkl.value)
-                    user32.SystemParametersInfoW(0x005A, 0, orig, 0x0001 | 0x0002)
-                    logger.info("_paste_to_console: restored SYSTEM layout")
-                except Exception:
-                    pass
+        time.sleep(0.15)
 
-        # Method 2: Try SendInput with keybd_event for each character
-        logger.info("_paste_to_console: PostMessageW failed, trying SendInput method")
+        # Bring window to foreground and send Ctrl+V
+        kernel32 = ctypes.windll.kernel32
+        current_tid = kernel32.GetCurrentThreadId()
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        attached = False
         try:
-            VK_CONTROL = 0x11
-            VK_V = 0x56
-            KEYEVENTF_KEYUP = 0x0002
-
-            # Save clipboard
-            old_clipboard = ""
-            try:
-                import pyperclip
-                old_clipboard = pyperclip.paste()
-            except Exception:
-                pass
-
-            # Copy text to clipboard
-            try:
-                import pyperclip
-                pyperclip.copy(text)
-            except Exception:
-                try:
-                    import subprocess as sp
-                    proc = sp.Popen(["clip.exe"], stdin=sp.PIPE, shell=True)
-                    encoded = text.encode("utf-16-le") + b"\0\0"
-                    proc.communicate(input=encoded)
-                except Exception:
-                    logger.error("_paste_to_console: clipboard copy failed")
-                    return False
-
-            time.sleep(0.1)
-
-            # Send Ctrl+V via keybd_event with scan codes (layout-independent)
-            SC_CONTROL = 0x1D
-            SC_V = 0x2F
-            old_fg = user32.GetForegroundWindow()
+            if current_tid != target_tid:
+                user32.AttachThreadInput(current_tid, target_tid, True)
+                attached = True
             user32.SetForegroundWindow(hwnd)
-            time.sleep(0.05)
-
-            user32.keybd_event(VK_CONTROL, SC_CONTROL, 0, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_V, SC_V, 0, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_V, SC_V, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_CONTROL, SC_CONTROL, KEYEVENTF_KEYUP, 0)
+            user32.BringWindowToTop(hwnd)
             time.sleep(0.1)
+        except Exception:
+            pass
 
-            # Restore focus
-            if old_fg and old_fg != hwnd:
-                user32.SetForegroundWindow(old_fg)
+        VK_CONTROL = 0x11
+        VK_V = 0x56
+        KEYEVENTF_KEYUP = 0x0002
 
-            # Restore clipboard
+        user32.keybd_event(VK_CONTROL, 0x1D, 0, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0x2F, 0, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0x2F, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_CONTROL, 0x1D, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.1)
+
+        if attached:
             try:
-                import pyperclip
-                pyperclip.copy(old_clipboard)
+                user32.AttachThreadInput(current_tid, target_tid, False)
             except Exception:
                 pass
 
-            logger.info("_paste_to_console: keybd_event method completed")
-            return True
+        # Restore clipboard
+        time.sleep(0.15)
+        self.copy_to_clipboard(saved)
 
-        except Exception as e:
-            logger.error(f"_paste_to_console: keybd_event with scan codes failed: {e}")
-
-        # Method 3: Try keybd_event with scan code 0 (auto-generated)
-        # Some apps don't support explicit scan codes
-        logger.info("_paste_to_console: trying keybd_event with scan code 0")
-        try:
-            old_fg = user32.GetForegroundWindow()
-            user32.SetForegroundWindow(hwnd)
-            time.sleep(0.05)
-
-            user32.keybd_event(VK_CONTROL, 0, 0, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_V, 0, 0, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.02)
-            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.1)
-
-            if old_fg and old_fg != hwnd:
-                user32.SetForegroundWindow(old_fg)
-
-            # Restore clipboard
-            try:
-                import pyperclip
-                pyperclip.copy(old_clipboard)
-            except Exception:
-                pass
-
-            logger.info("_paste_to_console: keybd_event with scan code 0 completed")
-            return True
-
-        except Exception as e:
-            logger.error(f"_paste_to_console: keybd_event with scan code 0 failed: {e}")
-
-        # Method 4: Try character typing as last resort
-        logger.info("_paste_to_console: trying character typing fallback")
-        try:
-            for char in text:
-                user32.PostMessageW(hwnd, 0x0102, ord(char), 0)  # WM_CHAR
-                time.sleep(0.01)
-            logger.info("_paste_to_console: character typing completed")
-            return True
-        except Exception as e:
-            logger.error(f"_paste_to_console: character typing failed: {e}")
-
-        logger.error("_paste_to_console: ALL METHODS FAILED")
-        return False
+        logger.info("_paste_to_console: done")
+        return True
 
     def _simulate_paste_macos(self) -> bool:
         """Simulate Cmd+V on macOS."""
