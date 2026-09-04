@@ -5,15 +5,15 @@ setlocal enabledelayedexpansion
 
 set "PROJECT_DIR=%~dp0"
 set "BUILD_SPEC=%PROJECT_DIR%build_exe_compat.spec"
-set "DIST_DIR=%PROJECT_DIR%dist"
+set "DIST_DIR=%PROJECT_DIR%dist\TurboWhisper"
 
 echo ============================================
-echo  TurboWhisper - One-File Build
-echo  (no compression, single exe)
+echo  TurboWhisper - Folder Build
+echo  (onedir mode, no runtime extraction)
 echo ============================================
 echo.
 
-:: 1. Find Python
+:: 1. Find or install Python
 echo [1/6] Locating Python...
 set "PYTHON="
 
@@ -44,6 +44,37 @@ if not defined PYTHON (
             goto :python_found
         )
     )
+)
+
+:: Auto-install Python via winget
+if not defined PYTHON (
+    echo    Python not found. Installing via winget...
+    where winget >nul 2>&1
+    if %ERRORLEVEL% NEQ 0 (
+        echo [!] winget not found. Install Python 3.12 manually from https://python.org
+        goto :error
+    )
+    winget install --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent >nul 2>&1
+    if %ERRORLEVEL% NEQ 0 (
+        echo [!] Failed to install Python via winget.
+        echo     Install Python 3.10+ manually from https://python.org and add to PATH.
+        goto :error
+    )
+
+    :: Refresh PATH and re-detect
+    set "PATH=%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts;%PATH%"
+    set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    if not exist "!PYTHON!" (
+        for %%V in (312 311 310) do (
+            if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" (
+                set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
+                goto :python_found
+            )
+        )
+        echo [!] Python installed but not found. Restart your terminal and retry.
+        goto :error
+    )
+    echo    Python installed successfully.
 )
 
 :python_found
@@ -93,47 +124,9 @@ goto :error
 echo    uv OK
 echo.
 
-:: 3. PortAudio
+:: 3. PortAudio (bundled in PyAudio wheel, no build needed)
 echo [3/6] Checking PortAudio...
-set "PORTAUDIO_DIR=C:\portaudio"
-if exist "C:\portaudio\include\portaudio.h" goto :portaudio_ready
-
-echo    PortAudio not found. Building from source...
-"%PYTHON%" -m pip install --quiet cmake 2>nul
-set "PATH=%APPDATA%\Python\Python314\Scripts;%PATH%"
-
-set "PA_SRC=%TEMP%\portaudio_build"
-if exist "%PA_SRC%" rmdir /s /q "%PA_SRC%" >nul 2>&1
-git clone --depth 1 https://github.com/PortAudio/portaudio.git "%PA_SRC%" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [!] Failed to download PortAudio.
-    goto :error
-)
-
-mkdir "%PA_SRC%\build" >nul 2>&1
-cmake -S "%PA_SRC%" -B "%PA_SRC%\build" -DPA_BUILD_SHARED_LIBS=ON >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [!] cmake configure failed.
-    goto :error
-)
-cmake --build "%PA_SRC%\build" --config Release >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [!] PortAudio build failed.
-    goto :error
-)
-
-mkdir "C:\portaudio\include" >nul 2>&1
-mkdir "C:\portaudio\lib" >nul 2>&1
-copy /y "%PA_SRC%\include\portaudio.h" "C:\portaudio\include\" >nul 2>&1
-copy /y "%PA_SRC%\build\Release\portaudio.lib" "C:\portaudio\lib\" >nul 2>&1
-copy /y "%PA_SRC%\build\Release\portaudio.dll" "C:\portaudio\lib\" >nul 2>&1
-copy /y "%PA_SRC%\build\Release\portaudio.exp" "C:\portaudio\lib\" >nul 2>&1
-echo    PortAudio installed to C:\portaudio
-
-:portaudio_ready
-set "VCPKG_PATH=%PORTAUDIO_DIR%"
-set "INCLUDE=%PORTAUDIO_DIR%\include;%INCLUDE%"
-set "LIB=%PORTAUDIO_DIR%\lib;%LIB%"
+echo    PortAudio is bundled in PyAudio wheel. Skipping build.
 echo    PortAudio OK
 echo.
 
@@ -144,10 +137,6 @@ cd /d "%PROJECT_DIR%"
 if %ERRORLEVEL% NEQ 0 (
     echo [!] uv sync failed.
     goto :error
-)
-
-for %%F in (".\.venv\Lib\site-packages\pyaudio\_*portaudio*.pyd") do (
-    copy /y "C:\portaudio\lib\portaudio.dll" "%%~dpF" >nul 2>&1
 )
 
 echo    Installing PyInstaller...
@@ -167,8 +156,8 @@ if exist "%PROJECT_DIR%dist" rmdir /s /q "%PROJECT_DIR%dist" >nul 2>&1
 echo    Done.
 echo.
 
-:: 6. Build (no compression — single exe, no UPX)
-echo [6/6] Building TurboWhisper (one-file mode)...
+:: 6. Build (onedir mode — folder with exe + DLLs)
+echo [6/6] Building TurboWhisper (folder mode)...
 ".venv\Scripts\python.exe" -m PyInstaller --clean "%BUILD_SPEC%"
 if %ERRORLEVEL% NEQ 0 (
     echo [!] PyInstaller build FAILED!
@@ -180,8 +169,16 @@ if not exist "%DIST_DIR%\TurboWhisper.exe" (
     goto :error
 )
 
-for %%I in ("%DIST_DIR%\TurboWhisper.exe") do set "EXE_SIZE=%%~zI"
-set /a "EXE_MB=!EXE_SIZE! / 1048576"
+:: Copy launcher into the output folder
+if exist "%PROJECT_DIR%Launch TurboWhisper.bat" (
+    copy /y "%PROJECT_DIR%Launch TurboWhisper.bat" "%DIST_DIR%\" >nul 2>&1
+    echo    Launcher copied to output folder.
+)
+
+:: Calculate total folder size
+set "TOTAL_SIZE=0"
+for /r "%DIST_DIR%" %%F in (*) do set /a "TOTAL_SIZE+=%%~zF"
+set /a "TOTAL_MB=!TOTAL_SIZE! / 1048576"
 
 echo.
 echo ============================================
@@ -189,10 +186,12 @@ echo  Build SUCCESSFUL!
 echo ============================================
 echo.
 echo  Output:    %DIST_DIR%\TurboWhisper.exe
-echo  Size:      !EXE_MB! MB
-echo  Mode:      One-file (all dependencies inside)
+echo  Size:      ~!TOTAL_MB! MB (entire folder)
+echo  Mode:      Folder (onedir, no extraction at runtime)
 echo.
-echo  NOTE: Single .exe file, no extra folders needed.
+echo  Distribute the entire TurboWhisper folder.
+echo  Users run "Launch TurboWhisper.bat" on first use
+echo  to auto-install VC++ Runtime if needed.
 echo.
 goto :end
 

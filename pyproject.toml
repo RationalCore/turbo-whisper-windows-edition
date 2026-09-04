@@ -26,7 +26,6 @@ classifiers = [
 dependencies = [
     "PyQt6>=6.4.0",
     "pyaudio>=0.2.13",
-    "numpy>=1.24.0",
     "httpx>=0.24.0",
     "pynput>=1.7.6",
     "python-xlib>=0.33",

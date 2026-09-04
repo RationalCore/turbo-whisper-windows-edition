@@ -753,6 +753,16 @@ class RecordingWindow(QWidget):
         self.auto_start_cb.setChecked(self.config.auto_start)
         group_layout.addWidget(self.auto_start_cb)
 
+        self.run_as_admin_cb = QCheckBox("Run as administrator")
+        self.run_as_admin_cb.setChecked(self.config.run_as_admin)
+        group_layout.addWidget(self.run_as_admin_cb)
+        admin_hint = QLabel("Requests admin rights via UAC on startup so hotkeys\n"
+                            "work in elevated windows (e.g. Task Manager, regedit).\n"
+                            "Disable to skip the UAC prompt.")
+        admin_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        admin_hint.setWordWrap(True)
+        group_layout.addWidget(admin_hint)
+
         layout.addWidget(group)
         layout.addStretch()
         return tab
@@ -1368,7 +1378,7 @@ class RecordingWindow(QWidget):
             self.hotkey_key_combo.currentIndexChanged.connect(self._on_hotkey_combo_changed)
         # Behavior checkboxes
         for cb in (self.auto_paste_cb, self.copy_clipboard_cb, self.char_typing_cb,
-                   self.store_recordings_cb, self.auto_start_cb):
+                   self.store_recordings_cb, self.auto_start_cb, self.run_as_admin_cb):
             cb.stateChanged.connect(self._apply_settings)
 
     def _on_hotkey_combo_changed(self) -> None:
@@ -1401,6 +1411,7 @@ class RecordingWindow(QWidget):
         self.config.use_character_typing = self.char_typing_cb.isChecked()
         self.config.store_recordings = self.store_recordings_cb.isChecked()
         self.config.auto_start = self.auto_start_cb.isChecked()
+        self.config.run_as_admin = self.run_as_admin_cb.isChecked()
         # Streaming
         if hasattr(self, 'streaming_cb'):
             self.config.streaming_mode = self.streaming_cb.isChecked()
@@ -2767,7 +2778,12 @@ def main():
 
     # Auto-elevate to admin on Windows (required for hotkeys in admin windows)
     if sys.platform == "win32" and not _is_admin() and "--no-admin" not in sys.argv:
-        if _request_admin_restart():
+        try:
+            _cfg = Config.load()
+            should_elevate = _cfg.run_as_admin
+        except Exception:
+            should_elevate = False
+        if should_elevate and _request_admin_restart():
             sys.exit(0)
 
     ensure_single_instance()

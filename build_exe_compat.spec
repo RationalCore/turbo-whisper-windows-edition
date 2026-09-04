@@ -1,15 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Compatibility build: no UPX, no PYZ archive compression.
-# Larger on disk but avoids unpacking issues on some machines.
+# Compatibility build: onedir mode (folder-based).
+# No runtime extraction = no decompression errors on any machine.
+# Collects PyQt6 DLLs/plugins and pyaudio portaudio DLL for portability.
+
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
+
+# Collect only DLLs from PyQt6 (not all Python submodules)
+pyqt6_bins = collect_dynamic_libs('PyQt6')
+
+# Collect PyQt6 data files (plugins, translations) — needed for Qt to find its plugins
+pyqt6_datas = collect_data_files('PyQt6', include_py_files=False)
+
+# Collect pyaudio DLLs (portaudio)
+pyaudio_bins = collect_dynamic_libs('pyaudio')
 
 a = Analysis(
     ['src\\turbo_whisper\\main.py'],
     pathex=[],
-    binaries=[],
+    binaries=pyqt6_bins + pyaudio_bins,
     datas=[
         ('config.example.json', '.'),
         ('assets\\logo.svg', 'assets'),
-    ],
+        ('src\\turbo_whisper\\assets\\base_hallucination_filter.json', 'turbo_whisper\\assets'),
+    ] + pyqt6_datas,
     hiddenimports=[
         # PyQt6 — only modules actually used by the codebase
         'PyQt6.QtCore',
@@ -20,7 +33,6 @@ a = Analysis(
 
         # Runtime dependencies (imported at module level or dynamically)
         'pyaudio',
-        'numpy',
         'httpx',
         'pyperclip',
         'pyautogui',
@@ -154,17 +166,18 @@ a = Analysis(
         'pycparser', 'cffi',
         'readline',
     ],
-    noarchive=True,  # No PYZ compression — files stay uncompressed
+    noarchive=False,
 )
 
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data)
 
+# Onedir mode: EXE + folder with all DLLs/data next to it.
+# No runtime extraction = works on any Windows without decompression errors.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='TurboWhisper',
     debug=False,
     bootloader_ignore_signals=False,
@@ -177,4 +190,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='TurboWhisper',
 )

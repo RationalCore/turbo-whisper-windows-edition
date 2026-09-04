@@ -1,5 +1,6 @@
 """Audio recording functionality."""
 
+import array
 import io
 import logging
 import os
@@ -11,7 +12,6 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
-import numpy as np
 import pyaudio
 
 from turbo_whisper.config import Config
@@ -44,6 +44,13 @@ def _setup_logger() -> logging.Logger:
 
 
 logger = _setup_logger()
+
+
+def _mean_abs_int16(data: bytes) -> float:
+    """Mean absolute value of 16-bit PCM audio samples (pure Python, no numpy)."""
+    samples = array.array("h")
+    samples.frombytes(data)
+    return sum(abs(s) for s in samples) / len(samples)
 
 
 def get_pipewire_sources() -> list[dict]:
@@ -223,9 +230,8 @@ class AudioRecorder:
                 frame_count += 1
 
                 # Calculate energy level (with mic gain applied)
-                audio_data = np.frombuffer(data, dtype=np.int16)
                 gain_factor = self.config.mic_gain / 100.0
-                level = np.abs(audio_data).mean() / 32768.0 * gain_factor
+                level = _mean_abs_int16(data) / 32768.0 * gain_factor
 
                 if self._streaming_mode and self._chunk_interval_frames > 0:
                     # Time-based streaming: accumulate frames and emit at intervals
@@ -297,16 +303,9 @@ class AudioRecorder:
                 frame_energies = []
                 for i in range(0, len(raw_audio), chunk_size):
                     frame_data = raw_audio[i:i + chunk_size]
-                    if len(frame_data) >= chunk_size:
-                        audio_samples = np.frombuffer(frame_data, dtype=np.int16)
-                        energy = np.abs(audio_samples).mean() / 32768.0
+                    if len(frame_data) >= 2:  # At least one int16 sample
+                        energy = _mean_abs_int16(frame_data) / 32768.0
                         frame_energies.append(energy)
-                    else:
-                        # Partial frame at end
-                        if frame_data:
-                            audio_samples = np.frombuffer(frame_data, dtype=np.int16)
-                            energy = np.abs(audio_samples).mean() / 32768.0
-                            frame_energies.append(energy)
 
                 # Dynamic threshold: 3% of peak energy (works at any mic level)
                 max_energy = max(frame_energies) if frame_energies else 0

@@ -112,3 +112,8 @@ build_exe_compat.bat
 - `WH_KEYBOARD_LL` hook fails silently on some systems → falls back to `RegisterHotKey` (no double-tap support)
 - One-file exe first launch is slow (~5-10s extraction to temp)
 - `console=False` hides runtime errors — use `console=True` in spec for debugging
+
+## Graphify
+If `graphify-out/graph.json` exists, use `graphify query` for codebase navigation
+on complex tasks (understanding architecture, finding module connections, tracing
+data flows). For simple edits to specific files - work directly without the graph.

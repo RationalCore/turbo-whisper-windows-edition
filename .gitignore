@@ -44,3 +44,7 @@ config.json
 
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
+
+# Generated artifacts
+graphify-out/
+pywinauto-mcp.log
