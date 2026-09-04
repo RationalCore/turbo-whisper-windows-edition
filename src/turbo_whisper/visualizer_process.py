@@ -102,8 +102,8 @@ class _IndicatorWindow(QWidget):
         self._timer.start()
         self.show()
         self.raise_()
-        # Re-apply saved position after window is shown (screen geometry is reliable now)
-        self._load_position()
+        # Validate position after window is shown (screens are reliably available now)
+        self._validate_position()
 
     def stop(self):
         self._timer.stop()
@@ -142,13 +142,14 @@ class _IndicatorWindow(QWidget):
     def _position_on_screen(self):
         screen = self.screen()
         if screen:
-            geo = screen.geometry()
+            geo = screen.availableGeometry()
             x = geo.right() - self._width - 20
             y = geo.bottom() - self._height - 20
             self.move(x, y)
             self._save_position()
 
     def _load_position(self):
+        """Load position from config. Applies unconditionally; validation in _validate_position."""
         try:
             config_path = _get_config_dir() / "indicator_position.json"
             if config_path.exists():
@@ -156,15 +157,29 @@ class _IndicatorWindow(QWidget):
                     pos = json.load(f)
                 x = pos.get("x", 100)
                 y = pos.get("y", 100)
-                # Check if position is visible on ANY connected screen
-                for screen in QGuiApplication.screens():
-                    geo = screen.geometry()
-                    if (x + self._width > geo.x() and x < geo.right() and
-                            y + self._height > geo.y() and y < geo.bottom()):
-                        self.move(x, y)
-                        return
-        except Exception:
-            pass
+                logger.info("Loaded position from config: (%d, %d)", x, y)
+                self.move(x, y)
+                return
+        except Exception as e:
+            logger.info("Error loading position: %s", e)
+
+    def _validate_position(self):
+        """Validate saved position is on a visible screen, reset if not."""
+        screens = QGuiApplication.screens()
+        if not screens:
+            logger.info("No screens available for validation")
+            return
+        x, y = self.x(), self.y()
+        logger.info("Validating position (%d, %d) against %d screens", x, y, len(screens))
+        for screen in screens:
+            geo = screen.availableGeometry()
+            logger.info("  Screen: %s geo=(%d,%d,%d,%d)",
+                        screen.name(), geo.x(), geo.y(), geo.width(), geo.height())
+            if (x + self._width > geo.x() and x < geo.right() and
+                    y + self._height > geo.y() and y < geo.bottom()):
+                logger.info("  -> Position is visible")
+                return
+        logger.info("Position (%d, %d) is off-screen, resetting to default", x, y)
         self._position_on_screen()
 
     def _save_position(self):

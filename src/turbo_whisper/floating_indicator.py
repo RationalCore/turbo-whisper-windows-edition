@@ -86,6 +86,8 @@ class FloatingIndicator(QWidget):
         self._timer.start()
         self.show()
         self.raise_()
+        # Validate position after window is shown (screens are reliably available now)
+        self._validate_position()
 
     def stop(self):
         """Stop the floating indicator (hide but don't destroy)."""
@@ -114,14 +116,14 @@ class FloatingIndicator(QWidget):
         """Position in the bottom-right corner of the screen."""
         screen = self.screen()
         if screen:
-            geo = screen.geometry()
+            geo = screen.availableGeometry()
             x = geo.right() - self._width - 20
             y = geo.bottom() - self._height - 20
             self.move(x, y)
             self._save_position()
 
     def _load_position(self):
-        """Load saved position from config."""
+        """Load saved position from config. Applies unconditionally; validation in _validate_position."""
         try:
             config_path = _get_config_dir() / "indicator_position.json"
             if config_path.exists():
@@ -129,15 +131,22 @@ class FloatingIndicator(QWidget):
                     pos = json.load(f)
                 x = pos.get("x", 100)
                 y = pos.get("y", 100)
-                # Check if position is visible on ANY connected screen
-                for screen in QGuiApplication.screens():
-                    geo = screen.geometry()
-                    if (x + self._width > geo.x() and x < geo.right() and
-                            y + self._height > geo.y() and y < geo.bottom()):
-                        self.move(x, y)
-                        return
+                self.move(x, y)
+                return
         except Exception:
             pass
+
+    def _validate_position(self):
+        """Validate saved position is on a visible screen, reset if not."""
+        screens = QGuiApplication.screens()
+        if not screens:
+            return
+        x, y = self.x(), self.y()
+        for screen in screens:
+            geo = screen.availableGeometry()
+            if (x + self._width > geo.x() and x < geo.right() and
+                    y + self._height > geo.y() and y < geo.bottom()):
+                return  # position is valid
         self._position_on_screen()
 
     def _save_position(self):
