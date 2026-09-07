@@ -321,7 +321,7 @@ class RecordingWindow(QWidget):
     def _setup_ui(self) -> None:
         """Set up the main window UI with all settings visible."""
         self.setWindowIcon(get_tray_icon(128, recording=False))
-        self.setWindowTitle("Turbo Whisper v1.0.0")
+        self.setWindowTitle("Turbo Whisper v1.0.2")
 
         # Normal window with Windows default styling
         self._base_window_flags = (
@@ -598,7 +598,7 @@ class RecordingWindow(QWidget):
         indicator_form.setContentsMargins(6, 10, 6, 4)
         indicator_form.setSpacing(4)
         self.show_indicator_cb = QCheckBox("Show floating indicator")
-        self.show_indicator_cb.setChecked(True)
+        self.show_indicator_cb.setChecked(self.config.show_indicator)
         self.show_indicator_cb.setToolTip("Show/hide the floating waveform indicator on screen")
         self.show_indicator_cb.stateChanged.connect(self._handle_indicator_toggle)
         indicator_form.addWidget(self.show_indicator_cb)
@@ -1412,6 +1412,9 @@ class RecordingWindow(QWidget):
         self.config.store_recordings = self.store_recordings_cb.isChecked()
         self.config.auto_start = self.auto_start_cb.isChecked()
         self.config.run_as_admin = self.run_as_admin_cb.isChecked()
+        # Indicator
+        if hasattr(self, 'show_indicator_cb'):
+            self.config.show_indicator = self.show_indicator_cb.isChecked()
         # Streaming
         if hasattr(self, 'streaming_cb'):
             self.config.streaming_mode = self.streaming_cb.isChecked()
@@ -1719,7 +1722,8 @@ class TurboWhisper:
         self.indicator_action = QAction("Show Indicator", menu)
         self.indicator_action.setCheckable(True)
         self.indicator_action.setChecked(True)
-        self.indicator_action.triggered.connect(self._toggle_indicator)
+        self._indicator_from_action = False
+        self.indicator_action.triggered.connect(self._on_indicator_action_triggered)
         menu.addAction(self.indicator_action)
 
         # Hidden toggle action (used by setText calls, not shown in menu)
@@ -1747,7 +1751,6 @@ class TurboWhisper:
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
 
-        self.tray.setContextMenu(menu)
         self._tray_menu = menu
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
@@ -1761,15 +1764,33 @@ class TurboWhisper:
         self._show_notification("Turbo Whisper", f"Streaming mode {status}",
                                QSystemTrayIcon.MessageIcon.Information)
 
+    def _on_indicator_action_triggered(self) -> None:
+        """Called when the indicator action is triggered from the menu.
+
+        Qt auto-toggles isChecked() BEFORE this handler, so read directly.
+        """
+        self._indicator_from_action = True
+        self._toggle_indicator()
+        self._indicator_from_action = False
+
     def _toggle_indicator(self) -> None:
-        """Toggle floating indicator visibility."""
-        new_visible = not self.indicator_action.isChecked()
-        self.indicator_action.setChecked(new_visible)
+        """Toggle floating indicator visibility.
+
+        Two call paths with different semantics:
+        - Menu action: Qt already toggled isChecked() → read directly.
+        - Tray icon click / settings checkbox: state unchanged → negate.
+        """
+        if self._indicator_from_action:
+            visible = self.indicator_action.isChecked()
+        else:
+            visible = not self.indicator_action.isChecked()
+
+        self.indicator_action.setChecked(visible)
         if hasattr(self.window, 'show_indicator_cb'):
             self.window.show_indicator_cb.blockSignals(True)
-            self.window.show_indicator_cb.setChecked(new_visible)
+            self.window.show_indicator_cb.setChecked(visible)
             self.window.show_indicator_cb.blockSignals(False)
-        if new_visible:
+        if visible:
             self._floating_indicator.show()
         else:
             self._floating_indicator.stop()
@@ -1805,6 +1826,8 @@ class TurboWhisper:
             self._toggle_indicator()
         elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_window()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            self._show_tray_menu()
 
     def _update_icons(self, recording: bool) -> None:
         self.tray.setIcon(get_tray_icon(64, recording=recording))
@@ -1853,6 +1876,9 @@ class TurboWhisper:
         self.window.raise_()
         self.window.activateWindow()
 
+        # Move indicator behind settings window
+        self._floating_indicator.set_always_on_top(False)
+
         # Stop the hotkey hook while settings are open (Windows may refuse
         # focus transfer to a Tool window from another process, so we can't
         # rely on focusInEvent alone to kill the WH_KEYBOARD_LL hook).
@@ -1861,9 +1887,29 @@ class TurboWhisper:
             logger.info("Hotkey manager stopped (settings window opened)")
 
     def _show_tray_menu(self) -> None:
-        """Show the tray context menu at cursor position (from visualizer right-click)."""
+        """Show the tray context menu at cursor position.
+
+        Called from both the tray icon (ContextMenu activation) and the
+        indicator subprocess (right-click → stdout → _on_right_click).
+
+        Uses popup() instead of exec() — non-blocking, Qt keeps processing
+        events so subprocess signals (readyReadStandardOutput) are not stalled.
+        """
         from PyQt6.QtGui import QCursor
-        self._tray_menu.exec(QCursor.pos())
+        self._floating_indicator.set_always_on_top(False)
+        self._tray_menu.popup(QCursor.pos())
+        # Restore always-on-top after menu is dismissed.
+        # aboutToHide fires when the menu closes (any path: click item,
+        # click outside, Esc).
+        self._tray_menu.aboutToHide.connect(self._on_tray_menu_hidden)
+
+    def _on_tray_menu_hidden(self) -> None:
+        """Restore indicator z-order after tray menu closes."""
+        try:
+            self._tray_menu.aboutToHide.disconnect(self._on_tray_menu_hidden)
+        except TypeError:
+            pass
+        self._floating_indicator.set_always_on_top(True)
 
     def _close_tray_menu(self) -> None:
         """Close the tray context menu (triggered by left-click on visualizer)."""
@@ -1887,6 +1933,8 @@ class TurboWhisper:
 
     def _on_window_hidden(self) -> None:
         """Restart hotkey manager when settings window is hidden/closed."""
+        # Restore indicator to always-on-top
+        self._floating_indicator.set_always_on_top(True)
         if self.hotkey_manager:
             self.hotkey_manager.start()
             logger.info("Hotkey manager restarted (settings window hidden)")
@@ -2493,10 +2541,10 @@ class TurboWhisper:
         now = time.time()
         cooldown = self.config.notification_cooldown
 
+        # "Copied" notifications always show immediately (no cooldown)
         if title.startswith("Copied") and len(message) > 10:
-            if not self._last_notification_time > 0:
-                self._last_notification_time = now
-                self.tray.showMessage(title, message, get_tray_icon(64), duration_ms)
+            self._last_notification_time = now
+            self.tray.showMessage(title, message, get_tray_icon(64), duration_ms)
             return
         if (now - self._last_notification_time) < cooldown:
             return
@@ -2676,7 +2724,8 @@ class TurboWhisper:
             self.streaming_action.setChecked(self.config.streaming_mode)
         # Indicator visibility
         if hasattr(self, 'indicator_action'):
-            self.indicator_action.setChecked(True)
+            self.indicator_action.setChecked(self.config.show_indicator)
+            self._on_indicator_toggled(2 if self.config.show_indicator else 0)
 
     def run(self) -> int:
         if self.hotkey_manager:

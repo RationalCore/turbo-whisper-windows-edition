@@ -51,6 +51,7 @@ class Config:
     waveform_color: str = "#84cc16"  # KnowAll.ai lime green
     background_color: str = "#1a1a2e"
     indicator_opacity: int = 235  # Visualizer window opacity (15-255, 255=opaque, 235 ≈ 92%)
+    show_indicator: bool = True  # Show/hide floating waveform indicator
     window_width: int = 520
     window_height: int = 260
 

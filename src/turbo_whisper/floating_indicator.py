@@ -444,6 +444,13 @@ class FloatingIndicatorProcess:
     def set_idle(self):
         self._send({"type": "idle"})
 
+    def set_always_on_top(self, on: bool):
+        """Toggle always-on-top for the indicator window.
+
+        When settings window is open, indicator should NOT stay on top.
+        """
+        self._send({"type": "always_on_top", "on": on})
+
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _send(self, cmd: dict):

@@ -7,6 +7,11 @@ Communicates via JSON lines on stdin:
   {"type":"idle"}
   {"type":"hotkey","text":"F8"}
   {"type":"exit"}
+  {"type":"show"}
+  {"type":"hide"}
+  {"type":"opacity","value":180}
+  {"type":"recording","active":true}
+  {"type":"always_on_top","on":false}
 """
 
 import json
@@ -85,6 +90,8 @@ class _IndicatorWindow(QWidget):
         self._is_recording = False
         self._bg_alpha = 235  # matches default config indicator_opacity
         self._frame_count = 0
+        self._always_on_top = True
+        self._user_hidden = False  # True when user disabled "Show Indicator"
 
         # Must call setWindowOpacity on Windows to properly initialize a
         # layered window (WA_TranslucentBackground). Value 1.0 means "no
@@ -136,6 +143,24 @@ class _IndicatorWindow(QWidget):
         """
         self._bg_alpha = max(15, min(255, value))
         self.update()
+
+    def set_always_on_top(self, on: bool):
+        """Toggle always-on-top z-order.
+
+        When off, the indicator sits behind the settings window.
+        Never shows the window if the user explicitly hid it via
+        "Show Indicator" — that takes priority.
+        """
+        self._always_on_top = on
+        if self._user_hidden:
+            return
+        if on:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.show()
+            self.raise_()
+        else:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+            self.show()
 
     # ── position persistence ─────────────────────────────────────────────
 
@@ -201,11 +226,7 @@ class _IndicatorWindow(QWidget):
         self._level_history.append(self._current_level)
         self._scroll_offset += 0.15
 
-        # Periodically re-raise to stay on top of all windows
         self._frame_count += 1
-        if self._frame_count % 60 == 0:
-            self.raise_()
-
         self.update()
 
     # ── drag + click-to-close ──────────────────────────────────────────
@@ -474,12 +495,16 @@ def main():
             window._hotkey_str = cmd.get("text", "F8")
             window.set_idle()
         elif t == "show":
+            window._user_hidden = False
             window.show()
             window.raise_()
         elif t == "hide":
+            window._user_hidden = True
             window.hide()
         elif t == "opacity":
             window.set_opacity(cmd.get("value", 180))
+        elif t == "always_on_top":
+            window.set_always_on_top(cmd.get("on", True))
 
     reader.command_received.connect(handle_command)
 
