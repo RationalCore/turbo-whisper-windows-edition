@@ -19,12 +19,14 @@ UNIT_CASES = [
     ("Сегодня хорошая погода, не правда ли?", False),
     ("Нужно купить хлеб, молоко и яйца.", False),
 
-    # Single short words - filtered as likely artifact
-    ("Да", True),
-    ("Нет", True),
-    ("Hi", True),
-    ("Ok", True),
-    ("Yes", True),
+    # Short legitimate words - preserved instead of being treated as artifacts
+    ("Да", False),
+    ("Нет", False),
+    ("Hi", False),
+    ("Ok", False),
+    ("Yes", False),
+    ("Все.", False),
+    ("Вот.", False),
 
     # Known hallucinations — must be filtered
     ("Продолжение следует...", True),

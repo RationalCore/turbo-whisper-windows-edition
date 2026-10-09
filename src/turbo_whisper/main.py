@@ -109,10 +109,6 @@ def _clean_hallucination(text: str) -> str | None:
     if not text_stripped:
         return None
 
-    # Filter single words shorter than 5 chars (usually noise artifacts)
-    if len(text_stripped) < 5 and " " not in text_stripped:
-        return None
-
     # Special case: substring check for 'субтитр' derivatives — always pure hallucination
     if "субтитр" in text_stripped:
         return None
@@ -190,6 +186,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSlider,
     QSystemTrayIcon,
@@ -263,6 +260,7 @@ class SignalBridge(QObject):
     """Bridge for thread-safe Qt signals."""
 
     toggle_recording = pyqtSignal()
+    recording_error = pyqtSignal(str)
     update_waveform = pyqtSignal(float, list)
     transcription_complete = pyqtSignal(str)
     transcription_error = pyqtSignal(str)
@@ -1639,6 +1637,7 @@ class TurboWhisper:
         self._chunk_order_timer.setInterval(100)  # Check every 100ms
 
         self.signals.toggle_recording.connect(self._toggle_recording)
+        self.signals.recording_error.connect(self._on_recording_error)
         self.signals.transcription_complete.connect(self._on_transcription_complete)
         self.signals.transcription_error.connect(self._on_transcription_error)
         self.signals.chunk_transcription_complete.connect(self._on_chunk_transcription_complete)
@@ -2073,7 +2072,10 @@ class TurboWhisper:
         else:
             # Batch mode: hide window, record all then transcribe
             try:
-                self.recorder.start(level_callback=self._on_audio_level)
+                self.recorder.start(
+                    level_callback=self._on_audio_level,
+                    on_error=self.signals.recording_error.emit,
+                )
                 print("_start_recording: recorder started (batch mode)")
             except Exception as e:
                 logger.error(f"Microphone error: {e}")
@@ -2117,6 +2119,7 @@ class TurboWhisper:
                 streaming_mode=True,
                 on_chunk_ready=self._on_chunk_ready,
                 on_auto_stop=self._on_auto_stop,
+                on_error=self.signals.recording_error.emit,
                 chunk_interval_seconds=self.config.chunk_duration_seconds,
             )
             logger.info("Streaming recording started successfully")
@@ -2319,9 +2322,9 @@ class TurboWhisper:
         self._floating_indicator.set_status("Cancelled", "#f59e0b")
         QTimer.singleShot(1500, self._floating_indicator.set_idle)
 
-    def _stop_recording(self) -> None:
+    def _stop_recording(self, force: bool = False) -> None:
         """Stop recording and process audio."""
-        if not self.is_recording:
+        if not self.is_recording and not force:
             print("_stop_recording: not recording, returning")
             return
 
@@ -2349,6 +2352,22 @@ class TurboWhisper:
             self._stop_batch_recording()
 
         self.is_stopping = False
+
+    def _on_recording_error(self, error: str) -> None:
+        logger.warning(f"Microphone capture failed: {error}; finishing captured audio")
+        popup = QMessageBox()
+        popup.setIcon(QMessageBox.Icon.Warning)
+        popup.setWindowTitle("Microphone disconnected")
+        popup.setText("Recording stopped because the microphone disconnected.")
+        popup.setInformativeText("Captured audio is being transcribed.")
+        popup.setStandardButtons(QMessageBox.StandardButton.Ok)
+        popup.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        popup.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        popup.finished.connect(lambda *_: setattr(self, "_recording_error_popup", None))
+        self._recording_error_popup = popup
+        popup.show()
+        popup.raise_()
+        QTimer.singleShot(0, lambda: self._stop_recording(force=True))
 
 
     def _stop_streaming_recording(self) -> None:

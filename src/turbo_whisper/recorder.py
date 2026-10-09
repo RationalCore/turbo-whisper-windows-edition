@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -44,6 +45,9 @@ def _setup_logger() -> logging.Logger:
 
 
 logger = _setup_logger()
+STREAM_STOP_TIMEOUT_SECONDS = 0.5
+MIC_STALL_TIMEOUT_SECONDS = 2.0
+WATCHDOG_POLL_INTERVAL_SECONDS = 0.1
 
 
 def _mean_abs_int16(data: bytes) -> float:
@@ -104,11 +108,16 @@ class AudioRecorder:
         self._actual_sample_rate = config.sample_rate
         self.waveform_buffer = deque(maxlen=100)
         self._record_thread = None
+        self._watchdog_thread = None
+        self._watchdog_active = False
+        self._last_read_at = 0.0
+        self._error_reported = False
 
         # Streaming mode state
         self._streaming_mode = False
         self._on_chunk_ready: Callable[[bytes], None] | None = None
         self._on_auto_stop: Callable[[], None] | None = None
+        self._on_error: Callable[[str], None] | None = None
         self._chunk_frames: list[bytes] = []
         self._overlap_frames: deque[bytes] = deque(maxlen=32)  # ~1s at 16kHz/chunk_size=1024
         self._chunk_interval_frames = 0  # frames between chunk emissions
@@ -169,6 +178,7 @@ class AudioRecorder:
         streaming_mode: bool = False,
         on_chunk_ready: Callable[[bytes], None] | None = None,
         on_auto_stop: Callable[[], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
         chunk_interval_seconds: float = 4.0,
     ) -> None:
         """Start recording audio.
@@ -178,6 +188,7 @@ class AudioRecorder:
             streaming_mode: If True, emit chunks at fixed time intervals
             on_chunk_ready: Called with WAV bytes when a chunk is ready
             on_auto_stop: Called when auto-stop timeout reached (no speech detected)
+            on_error: Called when microphone capture fails
             chunk_interval_seconds: Duration of each chunk in streaming mode
         """
         if self.is_recording:
@@ -191,11 +202,15 @@ class AudioRecorder:
         self._streaming_mode = streaming_mode
         self._on_chunk_ready = on_chunk_ready
         self._on_auto_stop = on_auto_stop
+        self._on_error = on_error
         self._chunk_frames = []
         self._overlap_frames = deque(maxlen=32)  # ~1s overlap
         self._frames_since_last_chunk = 0
         self._peak_level = 0.0
         self._last_speech_frame = 0
+        self._last_read_at = time.monotonic()
+        self._error_reported = False
+        self._watchdog_active = True
 
         # Calculate chunk interval in frames
         if streaming_mode and chunk_interval_seconds > 0:
@@ -219,6 +234,8 @@ class AudioRecorder:
 
         self._record_thread = threading.Thread(target=self._record_loop, daemon=True)
         self._record_thread.start()
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self._watchdog_thread.start()
 
     def _record_loop(self) -> None:
         """Recording loop - handles both batch and streaming modes."""
@@ -226,6 +243,7 @@ class AudioRecorder:
         while self.is_recording and self.stream:
             try:
                 data = self.stream.read(self.config.chunk_size, exception_on_overflow=False)
+                self._last_read_at = time.monotonic()
                 self.frames.append(data)
                 frame_count += 1
 
@@ -278,8 +296,27 @@ class AudioRecorder:
                     self.level_callback(level, list(self.waveform_buffer))
 
             except Exception as e:
-                print(f"Recording error: {e}")
+                self._report_capture_error(str(e))
                 break
+
+    def _watchdog_loop(self) -> None:
+        while self._watchdog_active and self._watchdog_thread is threading.current_thread():
+            if time.monotonic() - self._last_read_at > MIC_STALL_TIMEOUT_SECONDS:
+                self._report_capture_error("Microphone stopped responding")
+                return
+            time.sleep(WATCHDOG_POLL_INTERVAL_SECONDS)
+
+    def _report_capture_error(self, error: str) -> None:
+        if self._error_reported or not self.is_recording:
+            return
+        self._error_reported = True
+        logger.error(f"Recording error: {error}")
+        if self._on_error:
+            try:
+                self._on_error(error)
+            except Exception as callback_error:
+                logger.error(f"Recording error callback failed: {callback_error}")
+        self.is_recording = False
 
     def _build_chunk_wav(self, frames: list[bytes]) -> bytes:
         """Convert frames to WAV bytes for chunk transcription.
@@ -373,14 +410,20 @@ class AudioRecorder:
     def stop(self) -> bytes:
         """Stop recording and return WAV data."""
         self.is_recording = False
+        self._watchdog_active = False
+        self._watchdog_thread = None
 
-        if self._record_thread:
-            self._record_thread.join(timeout=1.0)
+        record_thread = self._record_thread
+        self._record_thread = None
+        if record_thread:
+            record_thread.join(timeout=1.0)
+            if record_thread.is_alive():
+                logger.warning("Recording thread did not stop before timeout")
 
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+        stream = self.stream
+        self.stream = None
+        if stream:
+            self._close_stream_safely(stream)
 
         wav_buffer = io.BytesIO()
         with wave.open(wav_buffer, "wb") as wf:
@@ -391,9 +434,31 @@ class AudioRecorder:
 
         return wav_buffer.getvalue()
 
+    def _close_stream_safely(self, stream) -> None:
+        """Close a device stream without blocking the UI on a disconnected device."""
+        def close_stream():
+            try:
+                stream.stop_stream()
+            except Exception as e:
+                logger.debug(f"Stream stop failed: {e}")
+            try:
+                stream.close()
+            except Exception as e:
+                logger.debug(f"Stream close failed: {e}")
+
+        close_thread = threading.Thread(target=close_stream, daemon=True)
+        close_thread.start()
+        close_thread.join(timeout=STREAM_STOP_TIMEOUT_SECONDS)
+        if close_thread.is_alive():
+            logger.warning("Audio stream cleanup still running after timeout")
+
     def cleanup(self) -> None:
         """Clean up audio resources."""
         self.is_recording = False
-        if self.stream:
-            self.stream.close()
+        self._watchdog_active = False
+        self._watchdog_thread = None
+        stream = self.stream
+        self.stream = None
+        if stream:
+            self._close_stream_safely(stream)
         self.audio.terminate()
