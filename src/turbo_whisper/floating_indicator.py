@@ -32,10 +32,11 @@ class FloatingIndicator(QWidget):
     waveform visualization and status during recording.
     """
 
-    def __init__(self, hotkey_str: str = "F8", parent=None):
+    def __init__(self, hotkey_str: str = "F8", version: str = "", parent=None):
         super().__init__(parent)
 
         self._hotkey_str = hotkey_str
+        self._app_version = version
 
         # Window flags: frameless, always on top, tool window (no taskbar)
         self.setWindowFlags(
@@ -274,6 +275,15 @@ class FloatingIndicator(QWidget):
             sub_y = h - 12
             painter.drawText(sub_x, sub_y, self._sub_text)
 
+        # Version label (bottom-right)
+        if self._app_version:
+            vfont = QFont("Segoe UI", 7)
+            painter.setFont(vfont)
+            painter.setPen(QColor(150, 150, 165, 160))
+            vtext = f"v{self._app_version}" if not self._app_version.startswith("v") else self._app_version
+            vw = painter.fontMetrics().horizontalAdvance(vtext)
+            painter.drawText(w - vw - 8, h - 6, vtext)
+
         painter.end()
 
     def _draw_waveform_bars(self, painter, x, y, width, height):
@@ -355,7 +365,7 @@ class FloatingIndicatorProcess:
         cls._instance = inst
         return inst
 
-    def __init__(self, hotkey_str: str = "F8"):
+    def __init__(self, hotkey_str: str = "F8", version: str = ""):
         # Prevent re-init on the same instance
         if getattr(self, "_started", False):
             return
@@ -370,6 +380,7 @@ class FloatingIndicatorProcess:
         self._on_minimize = None
 
         self._hotkey_str = hotkey_str
+        self._version = version
         self._proc = QProcess()
 
         # Route stderr of the child to our logging
@@ -394,7 +405,10 @@ class FloatingIndicatorProcess:
         # file. Launch the same EXE with --visualizer flag instead.
         if getattr(sys, 'frozen', False):
             exe = sys.executable
-            self._proc.start(exe, ["--visualizer", self._hotkey_str])
+            args = ["--visualizer", self._hotkey_str]
+            if self._version:
+                args += ["--version", self._version]
+            self._proc.start(exe, args)
         else:
             module_dir = Path(__file__).parent
             script = module_dir / "visualizer_process.py"
@@ -402,7 +416,10 @@ class FloatingIndicatorProcess:
                 logger.error("visualizer_process.py not found at %s", script)
                 return
             python = sys.executable
-            self._proc.start(python, [str(script), self._hotkey_str])
+            args = [str(script), self._hotkey_str]
+            if self._version:
+                args += ["--version", self._version]
+            self._proc.start(python, args)
 
         if not self._proc.waitForStarted(3000):
             msg = "Visualizer process failed to start"

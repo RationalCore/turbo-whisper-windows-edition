@@ -12,6 +12,8 @@ Communicates via JSON lines on stdin:
   {"type":"opacity","value":180}
   {"type":"recording","active":true}
   {"type":"always_on_top","on":false}
+
+CLI: <hotkey> [--version X.Y.Z]
 """
 
 import json
@@ -41,9 +43,10 @@ def _get_config_dir() -> Path:
 class _IndicatorWindow(QWidget):
     """Floating waveform indicator — exact copy of FloatingIndicator logic."""
 
-    def __init__(self, hotkey_str: str = "F8"):
+    def __init__(self, hotkey_str: str = "F8", version: str = ""):
         super().__init__()
         self._hotkey_str = hotkey_str
+        self._app_version = version
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -347,6 +350,15 @@ class _IndicatorWindow(QWidget):
             sw = metrics.horizontalAdvance(self._sub_text)
             painter.drawText((w - sw) // 2, h - 12, self._sub_text)
 
+        # Version label (bottom-right)
+        if self._app_version:
+            vfont = QFont("Segoe UI", 7)
+            painter.setFont(vfont)
+            painter.setPen(QColor(150, 150, 165, 160))
+            vtext = f"v{self._app_version}" if not self._app_version.startswith("v") else self._app_version
+            vw = painter.fontMetrics().horizontalAdvance(vtext)
+            painter.drawText(w - vw - 8, h - 6, vtext)
+
         # Minimize button (top-right corner)
         btn_color = QColor(120, 120, 140, 200) if self._minimize_hover else QColor(80, 80, 100, 140)
         painter.setBrush(btn_color)
@@ -463,12 +475,20 @@ def main():
     # Read hotkey from command-line arg (passed by FloatingIndicatorProcess).
     # When launched via PyInstaller EXE with --visualizer flag, skip the flag.
     hotkey = "F8"
-    for arg in sys.argv[1:]:
+    version = ""
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--version" and i + 1 < len(args):
+            version = args[i + 1]
+            i += 2
+            continue
         if not arg.startswith("--"):
             hotkey = arg
-            break
+        i += 1
 
-    window = _IndicatorWindow(hotkey_str=hotkey)
+    window = _IndicatorWindow(hotkey_str=hotkey, version=version)
     window.start()
 
     reader = _StdinReader()

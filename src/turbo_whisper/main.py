@@ -194,6 +194,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from turbo_whisper import __version__
 from turbo_whisper.api import WhisperAPIError, WhisperClient
 from turbo_whisper.config import Config
 from turbo_whisper.hotkey import create_hotkey_manager
@@ -319,7 +320,7 @@ class RecordingWindow(QWidget):
     def _setup_ui(self) -> None:
         """Set up the main window UI with all settings visible."""
         self.setWindowIcon(get_tray_icon(128, recording=False))
-        self.setWindowTitle("Turbo Whisper v1.0.2")
+        self.setWindowTitle(f"Turbo Whisper v{__version__}")
 
         # Normal window with Windows default styling
         self._base_window_flags = (
@@ -1657,7 +1658,7 @@ class TurboWhisper:
 
         # Floating indicator - always visible (runs in a separate process)
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
-        self._floating_indicator = FloatingIndicatorProcess(hotkey_str=hotkey_str)
+        self._floating_indicator = FloatingIndicatorProcess(hotkey_str=hotkey_str, version=__version__)
         self._floating_indicator._on_double_click = self._show_window
         self._floating_indicator._on_right_click = self._show_tray_menu
         self._floating_indicator._on_left_click = self._close_tray_menu

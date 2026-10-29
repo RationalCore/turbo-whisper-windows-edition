@@ -4,7 +4,7 @@
 
 Turbo Whisper is a free, open-source voice dictation and transcription app for Windows, Linux, and macOS. It provides real-time speech-to-text (STT) via OpenAI Whisper API with a PyQt6 GUI, global hotkeys, and auto-typing into any focused window.
 
-- **Version:** 1.0.2
+- **Version:** 1.0.3
 - **License:** MIT
 - **Python:** 3.10+
 - **Repo:** https://github.com/RationalCore/turbo-whisper-windows-edition
