@@ -69,12 +69,14 @@ class WhisperClient:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         return headers
 
-    async def transcribe(self, audio_data: bytes) -> str:
+    async def transcribe(self, audio_data: bytes, prompt: str | None = None) -> str:
         """
         Send audio to Whisper API and return transcription.
 
         Args:
             audio_data: WAV audio data as bytes
+            prompt: Optional context text (previous transcription) to improve
+                continuity and accuracy of chunked transcription
 
         Returns:
             Transcribed text
@@ -86,10 +88,11 @@ class WhisperClient:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 if self._use_json_api:
-                    payload = self._build_json_payload(audio_data)
+                    payload = self._build_json_payload(audio_data, prompt=prompt)
                     logger.debug(f"JSON payload (without base64 data): model={payload.get('model')}, "
                                  f"format={payload.get('input_audio', {}).get('format')}, "
-                                 f"language={payload.get('language', 'NOT SET')}")
+                                 f"language={payload.get('language', 'NOT SET')}, "
+                                 f"prompt_len={len(payload.get('prompt', ''))}")
                     response = await client.post(
                         self.config.api_url,
                         headers={**headers, "Content-Type": "application/json"},
@@ -100,7 +103,7 @@ class WhisperClient:
                         "model": self.config.model or "whisper-1",
                         "language": self.config.language,
                         "response_format": "json",
-                        "prompt": "Use proper punctuation: commas, periods, question marks.",
+                        "prompt": prompt or "Use proper punctuation: commas, periods, question marks.",
                     }
                     files = {
                         "file": ("audio.wav", audio_data, "audio/wav"),
@@ -132,11 +135,13 @@ class WhisperClient:
             logger.error(f"Unexpected error: {e}", exc_info=True)
             raise WhisperAPIError(f"Unexpected error: {e}")
 
-    def transcribe_sync(self, audio_data: bytes) -> str:
+    def transcribe_sync(self, audio_data: bytes, prompt: str | None = None) -> str:
         """Synchronous version of transcribe with retry on 5xx errors.
 
         Args:
             audio_data: WAV audio data as bytes
+            prompt: Optional context text (previous transcription) to improve
+                continuity and accuracy of chunked transcription
         """
         headers = self._get_headers()
         audio_size = len(audio_data)
@@ -149,10 +154,11 @@ class WhisperClient:
             try:
                 with httpx.Client(timeout=60.0) as client:
                     if self._use_json_api:
-                        payload = self._build_json_payload(audio_data)
+                        payload = self._build_json_payload(audio_data, prompt=prompt)
                         logger.debug(f"JSON payload (without base64 data): model={payload.get('model')}, "
                                      f"format={payload.get('input_audio', {}).get('format')}, "
-                                     f"language={payload.get('language', 'NOT SET')}")
+                                     f"language={payload.get('language', 'NOT SET')}, "
+                                     f"prompt_len={len(payload.get('prompt', ''))}")
                         response = client.post(
                             self.config.api_url,
                             headers={**headers, "Content-Type": "application/json"},
@@ -164,6 +170,8 @@ class WhisperClient:
                             "language": self.config.language,
                             "response_format": "json",
                         }
+                        if prompt:
+                            data["prompt"] = prompt
                         files = {
                             "file": ("audio.wav", audio_data, "audio/wav"),
                         }
@@ -237,12 +245,13 @@ class WhisperClient:
                 logger.error(f"Connection error: {e}")
                 raise WhisperAPIError(f"Connection error: {e}")
 
-    def _build_json_payload(self, audio_data: bytes) -> dict:
+    def _build_json_payload(self, audio_data: bytes, prompt: str | None = None) -> dict:
         """Build JSON payload for routerai.ru style API.
 
         Converts WAV bytes to base64 and builds the request body.
         Detects format from the WAV header if possible, defaults to 'wav'.
         If language is empty or None, it is omitted from the payload.
+        If prompt is given, it is passed as context (helps chunked transcription).
         """
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
 
@@ -263,7 +272,12 @@ class WhisperClient:
                 "data": audio_b64,
                 "format": audio_format,
             },
+            "temperature": 0.0,
         }
+
+        # Context prompt improves continuity between streaming chunks
+        if prompt and prompt.strip():
+            payload["prompt"] = prompt.strip()[-1000:]
 
         # Only include language if it's set (not empty)
         if self.config.language:

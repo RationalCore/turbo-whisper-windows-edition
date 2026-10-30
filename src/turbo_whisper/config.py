@@ -79,12 +79,10 @@ class Config:
 
     # Streaming mode settings
     streaming_mode: bool = False  # Enable chunked streaming transcription
-    chunk_duration_seconds: float = 4.0  # Duration of each chunk in time-based mode
-    silence_threshold_ms: int = 300  # Silence duration to trigger chunk (ms) — used for auto-stop
+    chunk_duration_seconds: float = 3.0  # Target chunk duration (chunks are cut at speech pauses)
+    silence_threshold_ms: int = 300  # Pause length that ends a chunk (ms)
     silence_energy_threshold: float = 0.01  # Energy level below which is "silence"
     min_chunk_bytes: int = 2000  # Minimum chunk size to transcribe
-    vad_aggressiveness: int = 1  # webrtcvad aggressiveness (0-3): 0=quality, 1=low bitrate, 2=default, 3=aggressive
-    vad_trim_silence: bool = False  # Remove leading/trailing silence from chunks
     auto_stop_timeout: int = 0  # Auto-stop recording after N seconds of silence (0=disabled, streaming only)
     max_recording_seconds: int = 300  # Max recording duration in batch mode (0=unlimited, default 5 min)
 
@@ -343,6 +341,10 @@ class Config:
                     data = json.load(f)
                 # Remove history from config data (it's in separate file now)
                 data.pop("history", None)
+                # Ignore unknown keys (options removed in newer versions)
+                import dataclasses
+                known = {f.name for f in dataclasses.fields(cls)}
+                data = {k: v for k, v in data.items() if k in known}
                 config = cls(**data)
             except (json.JSONDecodeError, TypeError) as e:
                 print(f"Warning: Could not load config: {e}")

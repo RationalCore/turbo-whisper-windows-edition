@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -138,7 +139,8 @@ def _clean_hallucination(text: str) -> str | None:
                 log.info(f"hallucination: filtered prefix '{p_orig}' → None (remainder='{remainder}')")
                 return None
             log.info(f"hallucination: stripped prefix '{p_orig}' → '{remainder[:60]}'")
-            return remainder
+            # Re-check: artifacts are often repeated ("Спасибо. Спасибо.")
+            return _clean_hallucination(remainder)
 
         # Hallucination at end: "Один. Два. Продолжение следует..." → "Один. Два."
         if text_lower.endswith(p_orig):
@@ -147,7 +149,7 @@ def _clean_hallucination(text: str) -> str | None:
                 log.info(f"hallucination: filtered suffix '{p_orig}' → None (remainder='{remainder}')")
                 return None
             log.info(f"hallucination: stripped suffix '{p_orig}' → '{remainder[:60]}'")
-            return remainder
+            return _clean_hallucination(remainder)
 
         # Hallucination in middle: "Проверка. Продолжение следует... Два." → "Проверка. Два."
         idx = text_lower.find(p_orig)
@@ -158,7 +160,7 @@ def _clean_hallucination(text: str) -> str | None:
             if parts:
                 result = " ".join(parts)
                 log.info(f"hallucination: stripped middle '{p_orig}' → '{result[:60]}'")
-                return result
+                return _clean_hallucination(result)
             log.info(f"hallucination: filtered middle '{p_orig}' → None")
             return None
 
@@ -196,6 +198,7 @@ from PyQt6.QtWidgets import (
 
 from turbo_whisper import __version__
 from turbo_whisper.api import WhisperAPIError, WhisperClient
+from turbo_whisper.chunking import stitch_text
 from turbo_whisper.config import Config
 from turbo_whisper.hotkey import create_hotkey_manager
 from turbo_whisper.icons import (
@@ -811,12 +814,39 @@ class RecordingWindow(QWidget):
         self.streaming_cb.stateChanged.connect(self._on_streaming_mode_changed)
         group_layout.addWidget(self.streaming_cb)
 
-        # Silence threshold
+        # Chunk length (target duration of each transcription chunk)
+        chunk_row = QHBoxLayout()
+        self.chunk_label = QLabel("Chunk:")
+        self.chunk_label.setFixedWidth(56)
+        self.chunk_slider = QSlider(Qt.Orientation.Horizontal)
+        self.chunk_slider.setRange(20, 60)  # 2.0s .. 6.0s (tenths)
+        self.chunk_slider.setValue(int(self.config.chunk_duration_seconds * 10))
+        self.chunk_slider.setSingleStep(5)
+        self.chunk_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.chunk_slider.setTickInterval(10)
+        self.chunk_slider.valueChanged.connect(self._on_chunk_duration_changed)
+        self.chunk_value_label = QLabel(f"{self.config.chunk_duration_seconds:.1f}s")
+        self.chunk_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
+        self.chunk_value_label.setFixedWidth(52)
+        self.chunk_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        chunk_row.addWidget(self.chunk_label)
+        chunk_row.addWidget(self.chunk_slider)
+        chunk_row.addWidget(self.chunk_value_label)
+        group_layout.addLayout(chunk_row)
+        chunk_hint = QLabel("Target length of each chunk sent for transcription.\n"
+                            "Chunks are cut at speech pauses near this length.\n"
+                            "Shorter = faster text, longer = fewer cuts.")
+        chunk_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
+        chunk_hint.setWordWrap(True)
+        self.chunk_hint = chunk_hint
+        group_layout.addWidget(chunk_hint)
+
+        # Pause threshold
         silence_row = QHBoxLayout()
-        self.silence_label = QLabel("Silence:")
+        self.silence_label = QLabel("Pause:")
         self.silence_label.setFixedWidth(56)
         self.silence_slider = QSlider(Qt.Orientation.Horizontal)
-        self.silence_slider.setRange(200, 1000)
+        self.silence_slider.setRange(150, 600)
         self.silence_slider.setValue(self.config.silence_threshold_ms)
         self.silence_slider.setSingleStep(50)
         self.silence_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -830,54 +860,14 @@ class RecordingWindow(QWidget):
         silence_row.addWidget(self.silence_slider)
         silence_row.addWidget(self.silence_value_label)
         group_layout.addLayout(silence_row)
-        silence_hint = QLabel("How long to wait after you stop speaking before\n"
-                              "processing. Lower = faster response, higher = fewer\n"
-                              "false triggers from short pauses.")
+        silence_hint = QLabel("How long a pause must be to end a chunk and to\n"
+                              "wait after you stop speaking before processing.\n"
+                              "Lower = faster response and more chunk cuts,\n"
+                              "higher = fewer cuts at short pauses.")
         silence_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
         silence_hint.setWordWrap(True)
+        self.silence_hint = silence_hint
         group_layout.addWidget(silence_hint)
-
-        # VAD Aggressiveness
-        vad_row = QHBoxLayout()
-        self.vad_label = QLabel("VAD:")
-        self.vad_label.setFixedWidth(56)
-        self.vad_slider = QSlider(Qt.Orientation.Horizontal)
-        self.vad_slider.setRange(0, 3)
-        self.vad_slider.setValue(self.config.vad_aggressiveness)
-        self.vad_slider.setSingleStep(1)
-        self.vad_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.vad_slider.setTickInterval(1)
-        self.vad_slider.valueChanged.connect(self._on_vad_changed)
-        self.vad_value_label = QLabel(self._get_vad_description(self.config.vad_aggressiveness))
-        self.vad_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
-        self.vad_value_label.setFixedWidth(64)
-        self.vad_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        vad_row.addWidget(self.vad_label)
-        vad_row.addWidget(self.vad_slider)
-        vad_row.addWidget(self.vad_value_label)
-        group_layout.addLayout(vad_row)
-        vad_hint = QLabel("Voice activity detection sensitivity.\n"
-                          "0 = best quality, 3 = most aggressive filtering.\n"
-                          "Start with 0, increase if getting too much silence noise.")
-        vad_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
-        vad_hint.setWordWrap(True)
-        group_layout.addWidget(vad_hint)
-
-        self.vad_trim_cb = QCheckBox("Trim silence from chunks")
-        self.vad_trim_cb.setChecked(self.config.vad_trim_silence)
-        self.vad_trim_cb.setToolTip(
-            "When enabled, leading and trailing silence is removed from\n"
-            "audio chunks before sending to API.\n"
-            "Reduces API costs and improves transcription accuracy."
-        )
-        self.vad_trim_cb.stateChanged.connect(self._apply_settings)
-        group_layout.addWidget(self.vad_trim_cb)
-        trim_hint = QLabel("Removes silent parts from the beginning and end\n"
-                           "of each audio chunk. Saves API costs and improves\n"
-                           "transcription accuracy. Keep enabled for best results.")
-        trim_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
-        trim_hint.setWordWrap(True)
-        group_layout.addWidget(trim_hint)
 
         # Auto-stop timeout
         timeout_row = QHBoxLayout()
@@ -977,33 +967,23 @@ class RecordingWindow(QWidget):
     def _update_streaming_ui_visibility(self) -> None:
         """Update visibility of streaming-related UI elements."""
         is_streaming = self.streaming_cb.isChecked() if hasattr(self, 'streaming_cb') else self.config.streaming_mode
-        for attr in ('silence_label', 'silence_slider', 'silence_value_label',
-                     'vad_label', 'vad_slider', 'vad_value_label', 'vad_trim_cb'):
+        for attr in ('chunk_label', 'chunk_slider', 'chunk_value_label', 'chunk_hint',
+                     'silence_label', 'silence_slider', 'silence_value_label', 'silence_hint'):
             if hasattr(self, attr):
                 getattr(self, attr).setVisible(is_streaming)
         # Auto-stop timeout is always visible
+
+    def _on_chunk_duration_changed(self, value: int) -> None:
+        """Update chunk duration display (slider value is tenths of a second)."""
+        if hasattr(self, 'chunk_value_label'):
+            self.chunk_value_label.setText(f"{value / 10:.1f}s")
+        self._apply_settings()
 
     def _on_silence_threshold_changed(self, value: int) -> None:
         """Update silence threshold display."""
         if hasattr(self, 'silence_value_label'):
             self.silence_value_label.setText(f"{value}ms")
         self._apply_settings()
-
-    def _on_vad_changed(self, value: int) -> None:
-        """Update VAD aggressiveness display."""
-        if hasattr(self, 'vad_value_label'):
-            self.vad_value_label.setText(self._get_vad_description(value))
-        self._apply_settings()
-
-    def _get_vad_description(self, value: int) -> str:
-        """Get human-readable description for VAD aggressiveness value."""
-        descriptions = {
-            0: "Sensitive",
-            1: "Balanced",
-            2: "Default",
-            3: "Aggressive"
-        }
-        return descriptions.get(value, f"Mode {value}")
 
     def _get_timeout_description(self, value: int) -> str:
         """Get human-readable description for auto-stop timeout value."""
@@ -1417,12 +1397,10 @@ class RecordingWindow(QWidget):
         # Streaming
         if hasattr(self, 'streaming_cb'):
             self.config.streaming_mode = self.streaming_cb.isChecked()
+        if hasattr(self, 'chunk_slider'):
+            self.config.chunk_duration_seconds = self.chunk_slider.value() / 10.0
         if hasattr(self, 'silence_slider'):
             self.config.silence_threshold_ms = self.silence_slider.value()
-        if hasattr(self, 'vad_slider'):
-            self.config.vad_aggressiveness = self.vad_slider.value()
-        if hasattr(self, 'vad_trim_cb'):
-            self.config.vad_trim_silence = self.vad_trim_cb.isChecked()
         if hasattr(self, 'timeout_slider'):
             self.config.auto_stop_timeout = self.timeout_slider.value()
         if hasattr(self, 'max_slider'):
@@ -1621,21 +1599,30 @@ class TurboWhisper:
         self._processing_thread = None
 
         # Streaming mode state
-        self._chunk_transcription_threads = []
         self._pending_chunk_texts = []  # Accumulate chunk texts for full message
         self._chunk_count = 0
         self._current_session_text = ""  # Full text for current recording session
         self._streaming_session_id = 0  # Incremented each recording to discard stale chunks
         self._focus_lost_during_recording = False  # True if target window lost focus
 
+        # Indicator activity state (temporary show while recording/transcribing)
+        self._indicator_temporary = False
+        self._indicator_activity_id = 0
+
         # Ordered chunk processing queue
-        import queue
         self._chunk_queue = queue.Queue()  # (sequence_number, text) tuples
         self._next_chunk_to_type = 0  # Next sequence number to type
-        self._chunk_results = {}  # {sequence_number: text} for storing results
+        self._chunk_results = {}  # {sequence_number: (text, had_overlap)} for storing results
         self._chunk_order_timer = QTimer()
         self._chunk_order_timer.timeout.connect(self._process_chunk_queue)
         self._chunk_order_timer.setInterval(100)  # Check every 100ms
+
+        # Sequential chunk transcription worker (one per streaming session,
+        # transcribes chunks in order so each chunk gets the previous text
+        # as context prompt)
+        self._chunk_input_queue = queue.Queue()  # (seq, chunk_audio, had_overlap)
+        self._chunk_worker_thread = None
+        self._chunk_worker_busy = False
 
         self.signals.toggle_recording.connect(self._toggle_recording)
         self.signals.recording_error.connect(self._on_recording_error)
@@ -1790,26 +1777,72 @@ class TurboWhisper:
             self.window.show_indicator_cb.blockSignals(True)
             self.window.show_indicator_cb.setChecked(visible)
             self.window.show_indicator_cb.blockSignals(False)
-        if visible:
-            self._floating_indicator.show()
-        else:
-            self._floating_indicator.stop()
+        self._set_indicator_visible(visible)
 
     def _hide_indicator(self) -> None:
         """Hide indicator (called from minimize button on indicator)."""
         self.indicator_action.setChecked(False)
         if hasattr(self.window, 'show_indicator_cb'):
             self.window.show_indicator_cb.setChecked(False)
-        self._floating_indicator.stop()
+        self._set_indicator_visible(False)
 
     def _on_indicator_toggled(self, state: int) -> None:
         """Handle indicator checkbox toggle from settings form."""
         visible = state == 2  # Qt.CheckState.Checked == 2
         self.indicator_action.setChecked(visible)
+        self._set_indicator_visible(visible)
+
+    def _set_indicator_visible(self, visible: bool) -> None:
+        """Apply indicator visibility (user intent), persist it to config."""
+        self._indicator_temporary = False
+        if self.config.show_indicator != visible:
+            self.config.show_indicator = visible
+            self.config.save()
         if visible:
             self._floating_indicator.show()
         else:
             self._floating_indicator.stop()
+
+    def _show_indicator_temporarily(self) -> None:
+        """Show the indicator while recording/transcription is active even if
+        the 'show floating indicator' option is disabled. It is hidden again
+        when the activity ends (see _finish_indicator_activity)."""
+        if self.config.show_indicator:
+            return
+        if not self._indicator_temporary:
+            self._indicator_temporary = True
+            logger.info("Showing indicator temporarily (disabled in settings)")
+            self._floating_indicator.show()
+
+    def _hide_indicator_if_temporary(self) -> None:
+        """Hide the indicator if it is only shown temporarily."""
+        if self._indicator_temporary and not self.config.show_indicator:
+            self._floating_indicator.stop()
+        self._indicator_temporary = False
+
+    def _finish_indicator_activity(self) -> None:
+        """Recording/transcription activity is over.
+
+        Deactivates the indicator's recording look, hides it again when it is
+        only shown temporarily, and restarts the background mic for idle
+        waveform feedback.
+        """
+        self._floating_indicator.set_recording(False)
+        self._indicator_activity_id += 1
+        activity_id = self._indicator_activity_id
+
+        def _maybe_hide():
+            # Don't hide if a new activity started in the meantime
+            if activity_id != self._indicator_activity_id:
+                return
+            if self.is_recording or self.is_processing:
+                return
+            self._hide_indicator_if_temporary()
+
+        QTimer.singleShot(2000, _maybe_hide)
+        # Restore idle microphone feedback for the waveform
+        if not self.recorder.is_recording:
+            self._start_background_mic()
 
     def _copy_last_transcription(self) -> None:
         """Copy the most recent transcription to clipboard."""
@@ -2032,6 +2065,10 @@ class TurboWhisper:
         self.toggle_action.setText("Stop Recording")
         self._update_icons(recording=True)
 
+        # Show the indicator for the duration of the activity (also when the
+        # 'show floating indicator' option is disabled)
+        self._show_indicator_temporarily()
+
         # Update floating indicator
         if self.config.streaming_mode:
             self._floating_indicator.set_status("Listening...", "#84cc16")
@@ -2073,6 +2110,13 @@ class TurboWhisper:
         else:
             # Batch mode: hide window, record all then transcribe
             try:
+                # Stop background mic first — otherwise recorder.start() is a
+                # no-op and the batch would include all audio captured since
+                # app start (speech said before the hotkey was pressed)
+                if self.recorder.is_recording:
+                    logger.info("Stopping background mic before starting batch recording")
+                    self.recorder.stop()
+                    time.sleep(0.1)  # Small delay to ensure clean stop
                 self.recorder.start(
                     level_callback=self._on_audio_level,
                     on_error=self.signals.recording_error.emit,
@@ -2085,6 +2129,7 @@ class TurboWhisper:
                 self._update_icons(recording=False)
                 self._waveform_timer.stop()
                 self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+                self._finish_indicator_activity()
                 self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
                                         QSystemTrayIcon.MessageIcon.Critical)
 
@@ -2105,12 +2150,23 @@ class TurboWhisper:
         # Reset ordered chunk processing state
         self._next_chunk_to_type = 1
         self._chunk_results = {}
-        # Clear queue
+        self._current_session_text = ""
+        # Clear queues
         while not self._chunk_queue.empty():
             try:
                 self._chunk_queue.get_nowait()
             except:
                 break
+        # Stop the previous session's worker (if still running) and start a new one
+        self._chunk_input_queue.put(None)
+        self._chunk_input_queue = queue.Queue()
+        self._chunk_worker_busy = False
+        self._chunk_worker_thread = threading.Thread(
+            target=self._chunk_transcription_worker,
+            args=(self._streaming_session_id,),
+            daemon=True,
+        )
+        self._chunk_worker_thread.start()
         # Start the ordered processing timer
         self._chunk_order_timer.start()
 
@@ -2136,6 +2192,7 @@ class TurboWhisper:
             self._chunk_order_timer.stop()
             self.window.hide()
             self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+            self._finish_indicator_activity()
             self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
                                     QSystemTrayIcon.MessageIcon.Critical)
 
@@ -2146,44 +2203,83 @@ class TurboWhisper:
         # Use signals to toggle recording from main thread
         self.signals.toggle_recording.emit()
 
-    def _on_chunk_ready(self, chunk_audio: bytes) -> None:
+    def _on_chunk_ready(self, chunk_audio: bytes, had_overlap: bool = False) -> None:
         """Called when a chunk boundary is reached (streaming mode)."""
         if len(chunk_audio) < self.config.min_chunk_bytes:
             return
 
         self._chunk_count += 1
         chunk_seq = self._chunk_count
-        logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes, session_id={self._streaming_session_id}")
+        logger.info(f"_on_chunk_ready: chunk #{chunk_seq}, {len(chunk_audio)} bytes, "
+                    f"had_overlap={had_overlap}, session_id={self._streaming_session_id}")
+        self._chunk_input_queue.put((chunk_seq, chunk_audio, had_overlap))
 
-        def transcribe_chunk(_seq=chunk_seq, _session_id=self._streaming_session_id):
-            logger.info(f"transcribe_chunk #{_seq}: started, session_id={_session_id}")
-            time.sleep(0.5)
-            if _session_id != self._streaming_session_id:
-                logger.info(f"transcribe_chunk #{_seq}: STALE session {_session_id} != {self._streaming_session_id}, discarding")
-                return
-            self.signals.show_status.emit(f"Transcribing chunk #{_seq}...")
-            if self.is_recording:
-                self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+    def _chunk_transcription_worker(self, session_id: int) -> None:
+        """Transcribe streaming chunks sequentially, in order.
+
+        Runs one thread per streaming session. Because chunks are transcribed
+        one after another, each chunk can use the transcription of the
+        previous chunks as the API prompt (context) — this keeps vocabulary,
+        style and punctuation consistent between chunks and brings streaming
+        quality close to batch mode.
+        """
+        input_queue = self._chunk_input_queue  # bound: a new session gets a new queue
+        while True:
+            item = input_queue.get()
+            if item is None:
+                break
+            chunk_seq, chunk_audio, had_overlap = item
+            if self._chunk_worker_thread is threading.current_thread():
+                self._chunk_worker_busy = True
             try:
-                logger.info(f"transcribe_chunk #{_seq}: calling API...")
-                text = self.client.transcribe_sync(chunk_audio)
-                logger.info(f"transcribe_chunk #{_seq}: API OK, len={len(text) if text else 0}, preview='{text[:80] if text else 'EMPTY'}'")
-                self._chunk_results[_seq] = text
-                self._chunk_queue.put(_seq)
-            except Exception as e:
-                logger.error(f"transcribe_chunk #{_seq}: API FAILED: {e}")
-                self._chunk_results[_seq] = None
-                self._chunk_queue.put(_seq)
-                # Fatal errors (401, 403, 404, 405) — stop recording immediately
-                err_str = str(e)
-                if any(code in err_str for code in ("401", "403", "404", "405",
-                                                    "Unauthorized", "Access denied")):
-                    logger.error(f"transcribe_chunk #{_seq}: fatal error, stopping recording")
-                    self.signals.transcription_error.emit(err_str)
+                if session_id != self._streaming_session_id:
+                    logger.info(f"transcribe_chunk #{chunk_seq}: STALE session "
+                                f"{session_id} != {self._streaming_session_id}, discarding")
+                    continue
 
-        thread = threading.Thread(target=transcribe_chunk, daemon=True)
-        thread.start()
-        self._chunk_transcription_threads.append(thread)
+                self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
+                if self.is_recording:
+                    self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+
+                context = self._current_session_text[-300:] if self._current_session_text else ""
+                logger.info(f"transcribe_chunk #{chunk_seq}: calling API "
+                            f"(prompt_len={len(context)})...")
+                try:
+                    text = self.client.transcribe_sync(chunk_audio, prompt=context or None)
+                except Exception as e:
+                    logger.error(f"transcribe_chunk #{chunk_seq}: API FAILED: {e}")
+                    err_str = str(e)
+                    if session_id == self._streaming_session_id:
+                        self._chunk_results[chunk_seq] = (None, False)
+                        self._chunk_queue.put(chunk_seq)
+                    # Fatal errors (401, 403, 404, 405) — stop recording immediately
+                    if any(code in err_str for code in ("401", "403", "404", "405",
+                                                        "Unauthorized", "Access denied")):
+                        logger.error(f"transcribe_chunk #{chunk_seq}: fatal error, stopping recording")
+                        self.signals.transcription_error.emit(err_str)
+                    continue
+
+                if session_id != self._streaming_session_id:
+                    logger.info(f"transcribe_chunk #{chunk_seq}: STALE after API, discarding")
+                    continue
+
+                logger.info(f"transcribe_chunk #{chunk_seq}: API OK, len={len(text) if text else 0}, "
+                            f"preview='{text[:80] if text else 'EMPTY'}'")
+                final_text = None
+                if text and text.strip():
+                    cleaned = _clean_hallucination(text.strip())
+                    if cleaned:
+                        # Remove words duplicated by audio overlap at forced cuts
+                        if had_overlap:
+                            cleaned = stitch_text(self._current_session_text, cleaned)
+                        final_text = cleaned or None
+                self._chunk_results[chunk_seq] = (final_text, had_overlap)
+                self._chunk_queue.put(chunk_seq)
+                if final_text:
+                    self._current_session_text = (self._current_session_text + " " + final_text).strip()
+            finally:
+                if self._chunk_worker_thread is threading.current_thread():
+                    self._chunk_worker_busy = False
 
     def _update_insert_time(self) -> None:
         """Update the last insert time (called after successful text insert)."""
@@ -2266,22 +2362,20 @@ class TurboWhisper:
                 self._chunk_queue.put(chunk_seq)
                 break
 
-            # Get the transcription result
-            text = self._chunk_results.pop(chunk_seq, None)
+            # Get the transcription result (already cleaned and stitched
+            # by the transcription worker)
+            result = self._chunk_results.pop(chunk_seq, None)
             self._next_chunk_to_type += 1
+
+            if result is None:
+                continue
+            text, _had_overlap = result
 
             # Filter out empty/invalid transcriptions
             if not text or not text.strip():
                 logger.debug(f"Chunk #{chunk_seq}: empty transcription, skipping")
                 continue
-
-            # Filter out common model artifacts
             text = text.strip()
-            cleaned = _clean_hallucination(text)
-            if cleaned is None:
-                logger.debug(f"Chunk #{chunk_seq}: model artifact '{text[:50]}', skipping")
-                continue
-            text = cleaned
 
             logger.info(f"Chunk #{chunk_seq}: typing '{text[:50]}'")
 
@@ -2299,7 +2393,12 @@ class TurboWhisper:
             display = text[:40] + "..." if len(text) > 40 else text
             self.window.set_status(f"Transcribed: {display}")
             if self.is_recording:
-                self._floating_indicator.set_status("Listening...", "#84cc16")
+                # Keep showing the transcription state while more chunks are
+                # still being transcribed
+                if self._chunk_worker_busy or not self._chunk_input_queue.empty():
+                    self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+                else:
+                    self._floating_indicator.set_status("Listening...", "#84cc16")
 
     def _cancel_recording(self) -> None:
         """Cancel recording and clean up."""
@@ -2310,7 +2409,6 @@ class TurboWhisper:
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
-        self._floating_indicator.set_recording(False)
         if hasattr(self, '_chunk_order_timer'):
             self._chunk_order_timer.stop()
         self.recorder.stop()
@@ -2322,6 +2420,7 @@ class TurboWhisper:
         # Update floating indicator
         self._floating_indicator.set_status("Cancelled", "#f59e0b")
         QTimer.singleShot(1500, self._floating_indicator.set_idle)
+        self._finish_indicator_activity()
 
     def _stop_recording(self, force: bool = False) -> None:
         """Stop recording and process audio."""
@@ -2343,7 +2442,8 @@ class TurboWhisper:
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
-        self._floating_indicator.set_recording(False)
+        # NOTE: the indicator stays in its active look while the transcription
+        # is pending — _finish_indicator_activity() deactivates it when done
 
         if self.config.streaming_mode:
             # Streaming mode: combine chunks into full message
@@ -2386,7 +2486,8 @@ class TurboWhisper:
             if self.recorder.is_recording:
                 self.recorder.stop()
             self._floating_indicator.set_status("Cancelled", "#f59e0b")
-            self._floating_indicator.set_idle()
+            QTimer.singleShot(1500, self._floating_indicator.set_idle)
+            self._finish_indicator_activity()
             self.window.hide()
             return
 
@@ -2398,6 +2499,7 @@ class TurboWhisper:
 
         # 2. Flush remaining chunk BEFORE stopping (needs _streaming_mode=True)
         remaining_chunk = self.recorder.flush_remaining_chunk()
+        tail_had_overlap = self.recorder.last_chunk_had_overlap
 
         # 3. Stop microphone
         self.recorder._streaming_mode = False
@@ -2406,14 +2508,11 @@ class TurboWhisper:
         # 4. Show Finishing... while we process remaining
         self._floating_indicator.set_status("Finishing...", "#f59e0b")
 
-        # 5. Wait for in-flight transcriptions (max 10s)
+        # 5. Wait for the transcription worker to drain queued chunks (max 10s)
         wait_start = time.time()
-        while self._chunk_transcription_threads and (time.time() - wait_start) < 10:
-            alive = [t for t in self._chunk_transcription_threads if t.is_alive()]
-            if not alive:
-                break
-            logger.info(f"Waiting for {len(alive)} transcription threads...")
-            time.sleep(0.2)
+        while (self._chunk_worker_busy or not self._chunk_input_queue.empty()) and (time.time() - wait_start) < 10:
+            logger.info("Waiting for chunk transcription worker...")
+            time.sleep(0.1)
 
         # 6. Process the chunk queue (ordered)
         self._process_chunk_queue()
@@ -2422,15 +2521,19 @@ class TurboWhisper:
         if remaining_chunk and len(remaining_chunk) >= self.config.min_chunk_bytes:
             logger.info(f"Processing final chunk: {len(remaining_chunk)} bytes")
             try:
-                text = self.client.transcribe_sync(remaining_chunk)
+                context = self._current_session_text[-300:] if self._current_session_text else ""
+                text = self.client.transcribe_sync(remaining_chunk, prompt=context or None)
                 if text:
                     clean_text = _clean_hallucination(text.strip())
+                    if clean_text and tail_had_overlap:
+                        clean_text = stitch_text(self._current_session_text, clean_text) or None
                     if clean_text:
                         if self.config.auto_paste:
                             self.typer.type_text(clean_text)
                             self._update_insert_time()
                             self.typer.type_text(" ")
                         self._pending_chunk_texts.append(clean_text)
+                        self._current_session_text = (self._current_session_text + " " + clean_text).strip()
                         logger.info(f"Final chunk transcribed: '{clean_text[:50]}'")
             except Exception as e:
                 logger.error(f"Final chunk failed: {e}")
@@ -2465,7 +2568,8 @@ class TurboWhisper:
         else:
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
 
-        self._floating_indicator.set_idle()
+        QTimer.singleShot(1500, self._floating_indicator.set_idle)
+        self._finish_indicator_activity()
 
         # Clean up
         self._pending_chunk_texts = []
@@ -2479,6 +2583,7 @@ class TurboWhisper:
             self.recorder.stop()
             self._floating_indicator.set_status("Cancelled", "#f59e0b")
             self._floating_indicator.set_idle()
+            self._finish_indicator_activity()
             return
 
         self._floating_indicator.set_status("Processing...", "#f59e0b")
@@ -2489,6 +2594,7 @@ class TurboWhisper:
             print(f"_stop_recording: too short ({len(audio_data)} < {self.config.min_audio_bytes}), aborting")
             self._floating_indicator.set_status("Too short", "#f59e0b")
             self._floating_indicator.set_idle()
+            self._finish_indicator_activity()
             return
 
         self.is_processing = True
@@ -2579,7 +2685,8 @@ class TurboWhisper:
         if self._focus_lost_during_recording:
             logger.info("Transcription complete but focus was lost — discarding result")
             self._floating_indicator.set_status("Cancelled (focus lost)", "#f59e0b")
-            self._floating_indicator.set_idle()
+            QTimer.singleShot(1500, self._floating_indicator.set_idle)
+            self._finish_indicator_activity()
             return
 
         audio_filename = getattr(self, "_pending_audio_filename", None)
@@ -2594,7 +2701,8 @@ class TurboWhisper:
                     except OSError:
                         pass
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
-            self._floating_indicator.set_idle()
+            QTimer.singleShot(1500, self._floating_indicator.set_idle)
+            self._finish_indicator_activity()
             return
 
         # Filter out model artifacts
@@ -2602,7 +2710,8 @@ class TurboWhisper:
         if clean_text is None:
             logger.debug(f"Batch mode: model artifact '{text.strip()[:50]}', skipping")
             self._floating_indicator.set_status("No speech detected", "#f59e0b")
-            self._floating_indicator.set_idle()
+            QTimer.singleShot(1500, self._floating_indicator.set_idle)
+            self._finish_indicator_activity()
             return
 
         self.config.add_to_history(clean_text, audio_file=audio_filename)
@@ -2624,7 +2733,8 @@ class TurboWhisper:
         else:
             self._floating_indicator.set_status("Done!", "#84cc16")
 
-        self._floating_indicator.set_idle()
+        QTimer.singleShot(1500, self._floating_indicator.set_idle)
+        self._finish_indicator_activity()
 
     def _on_transcription_error(self, error: str) -> None:
         self.is_processing = False
@@ -2681,6 +2791,9 @@ class TurboWhisper:
             self._show_notification("Turbo Whisper", f"{msg}. {hint}",
                                     QSystemTrayIcon.MessageIcon.Warning, 5000)
             self._floating_indicator.set_status(msg, "#ef4444", hint)
+
+        QTimer.singleShot(3000, self._floating_indicator.set_idle)
+        self._finish_indicator_activity()
 
     def _quit(self) -> None:
         if self.is_recording or self.is_processing:

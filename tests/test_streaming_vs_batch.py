@@ -153,7 +153,7 @@ def test_batch_vs_streaming():
     for i, chunk_raw in enumerate(trimmed_chunks):
         chunk_wav = raw_to_wav(chunk_raw, sample_rate)
         context = accumulated[-300:] if accumulated else ""
-        text = client.transcribe_sync(chunk_wav, context=context)
+        text = client.transcribe_sync(chunk_wav, prompt=context or None)
         clean = text.strip()
 
         if not clean or _is_hallucination(clean):

@@ -4,7 +4,7 @@
 
 Turbo Whisper is a free, open-source voice dictation and transcription app for Windows, Linux, and macOS. It provides real-time speech-to-text (STT) via OpenAI Whisper API with a PyQt6 GUI, global hotkeys, and auto-typing into any focused window.
 
-- **Version:** 1.0.3
+- **Version:** 1.1.0
 - **License:** MIT
 - **Python:** 3.10+
 - **Repo:** https://github.com/RationalCore/turbo-whisper-windows-edition
@@ -17,6 +17,7 @@ src/turbo_whisper/
 ├── config.py               # Config dataclass, JSON persistence (~/.config/turbo-whisper/)
 ├── api.py                  # WhisperClient — HTTP API calls (httpx)
 ├── recorder.py             # AudioRecorder — PyAudio mic capture
+├── chunking.py             # StreamingChunker — pause-aware chunking + text stitching
 ├── hotkey.py               # WinAPI hotkey manager (RegisterHotKey, WH_KEYBOARD_LL)
 ├── typer.py                # Auto-type: clipboard paste, keybd_event, SendInput, pynput
 ├── silence.py              # VAD (webrtcvad) for streaming silence detection

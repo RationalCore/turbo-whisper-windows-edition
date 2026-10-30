@@ -2,7 +2,7 @@
 
 from importlib.metadata import version, PackageNotFoundError
 
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.1.0"
 
 try:
     __version__ = version("turbo-whisper")
