@@ -2919,15 +2919,21 @@ def _is_admin() -> bool:
 
 
 def main():
-    # Print version and exit (useful to verify frozen builds)
-    if "--version" in sys.argv:
+    # When launched as a child visualizer process (PyInstaller build),
+    # run the visualizer event loop instead of the main app.
+    # NOTE: must be checked before --version — the visualizer is spawned with
+    # "--visualizer <hotkey> --version <text>" (the version shown on the orb).
+    if "--visualizer" in sys.argv:
+        from turbo_whisper.visualizer_process import main as viz_main
+        viz_main()
+        return
+
+    # Print version and exit (useful to verify frozen builds).
+    # Only when used alone: "--version <text>" is a visualizer argument.
+    if sys.argv[1:] == ["--version"]:
         from turbo_whisper import __version__
         print(f"Turbo Whisper {__version__}")
         return
-
-    # When launched as a child visualizer process (PyInstaller build),
-    # run the visualizer event loop instead of the main app.
-    if "--visualizer" in sys.argv:
         from turbo_whisper.visualizer_process import main as viz_main
         viz_main()
         return
