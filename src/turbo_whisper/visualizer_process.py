@@ -25,7 +25,7 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QRectF, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QObject, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication
 from PyQt6.QtWidgets import QApplication, QWidget
 
@@ -107,13 +107,14 @@ class _IndicatorWindow(QWidget):
         self._timer.setInterval(33)
 
         self._load_position()
+        self._watch_screens()
 
     def start(self):
         self._timer.start()
         self.show()
         self.raise_()
-        # Validate position after window is shown (screens are reliably available now)
-        self._validate_position()
+        # Also run on every showEvent; this covers first show immediately
+        self._ensure_on_screen()
 
     def stop(self):
         self._timer.stop()
@@ -167,17 +168,79 @@ class _IndicatorWindow(QWidget):
 
     # ── position persistence ─────────────────────────────────────────────
 
+    def showEvent(self, event):
+        """Every show goes through position validation."""
+        super().showEvent(event)
+        self._ensure_on_screen()
+
+    def _watch_screens(self):
+        """Re-validate the position whenever the monitor layout changes."""
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        app.screenAdded.connect(self._watch_screen)
+        app.screenRemoved.connect(self._on_screen_change)
+        app.primaryScreenChanged.connect(self._on_screen_change)
+        for screen in app.screens():
+            self._watch_screen(screen)
+
+    def _watch_screen(self, screen):
+        screen.availableGeometryChanged.connect(self._on_screen_change)
+        screen.geometryChanged.connect(self._on_screen_change)
+
+    def _on_screen_change(self, *_args):
+        if self.isVisible():
+            self._ensure_on_screen()
+
+    def _ensure_on_screen(self, *_args):
+        """Guarantee the window is fully inside one of the available screens.
+
+        Runs on every show and on every monitor layout change. Never saves
+        the corrected position — only user-dragged positions are persisted,
+        so a temporarily disconnected monitor does not lose the position.
+        """
+        screens = QGuiApplication.screens()
+        if not screens:
+            logger.info("No screens available for validation")
+            return
+        w = self.width() or self._width
+        h = self.height() or self._height
+        x, y = self.x(), self.y()
+        win = QRect(x, y, w, h)
+
+        for screen in screens:
+            if screen.availableGeometry().contains(win):
+                return  # fully visible on some screen — keep user position
+
+        # Not fully inside any single screen — clamp into the closest one
+        def _overlap(screen):
+            inter = screen.availableGeometry().intersected(win)
+            return inter.width() * inter.height()
+
+        best = max(screens, key=_overlap)
+        if _overlap(best) == 0:
+            # Fully outside every screen (e.g. a monitor was unplugged)
+            logger.info("Position (%d, %d) is off-screen, using default", x, y)
+            self._position_on_screen()
+            return
+        geo = best.availableGeometry()
+        nx = min(max(x, geo.x()), geo.x() + geo.width() - w)
+        ny = min(max(y, geo.y()), geo.y() + geo.height() - h)
+        logger.info("Clamping position (%d, %d) -> (%d, %d) on screen %s",
+                    x, y, nx, ny, best.name())
+        self.move(nx, ny)
+
     def _position_on_screen(self):
-        screen = self.screen()
+        """Place in the bottom-right corner of the primary screen (not saved)."""
+        screen = QGuiApplication.primaryScreen() or self.screen()
         if screen:
             geo = screen.availableGeometry()
             x = geo.right() - self._width - 20
             y = geo.bottom() - self._height - 20
             self.move(x, y)
-            self._save_position()
 
     def _load_position(self):
-        """Load position from config. Applies unconditionally; validation in _validate_position."""
+        """Load position from config. Applies unconditionally; validation in _ensure_on_screen."""
         try:
             config_path = _get_config_dir() / "indicator_position.json"
             if config_path.exists():
@@ -190,25 +253,6 @@ class _IndicatorWindow(QWidget):
                 return
         except Exception as e:
             logger.info("Error loading position: %s", e)
-
-    def _validate_position(self):
-        """Validate saved position is on a visible screen, reset if not."""
-        screens = QGuiApplication.screens()
-        if not screens:
-            logger.info("No screens available for validation")
-            return
-        x, y = self.x(), self.y()
-        logger.info("Validating position (%d, %d) against %d screens", x, y, len(screens))
-        for screen in screens:
-            geo = screen.availableGeometry()
-            logger.info("  Screen: %s geo=(%d,%d,%d,%d)",
-                        screen.name(), geo.x(), geo.y(), geo.width(), geo.height())
-            if (x + self._width > geo.x() and x < geo.right() and
-                    y + self._height > geo.y() and y < geo.bottom()):
-                logger.info("  -> Position is visible")
-                return
-        logger.info("Position (%d, %d) is off-screen, resetting to default", x, y)
-        self._position_on_screen()
 
     def _save_position(self):
         try:
