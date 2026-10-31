@@ -736,8 +736,9 @@ class RecordingWindow(QWidget):
         self.char_typing_cb.setChecked(self.config.use_character_typing)
         group_layout.addWidget(self.char_typing_cb)
         char_hint = QLabel("Simulates individual keystrokes instead of clipboard\n"
-                           "paste (Ctrl+V). Slower but works in apps that don't\n"
-                           "accept paste, like some remote desktops.")
+                           "paste (Ctrl+V). Types at a steady speed of ~33 characters\n"
+                           "per second, one character at a time. Works in apps that\n"
+                           "don't accept paste, like some remote desktops.")
         char_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         char_hint.setWordWrap(True)
         group_layout.addWidget(char_hint)

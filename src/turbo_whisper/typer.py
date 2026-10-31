@@ -82,6 +82,12 @@ import time
 
 SYSTEM = platform.system()
 
+# Steady character-typing speed on Windows: one character every 30 ms
+# (~33 chars/s). Constant on purpose — fast enough to feel instant-ish,
+# slow enough that every character is rendered individually by the target
+# app (faster bursts get batched into word-like chunks on repaint).
+CHAR_TYPING_INTERVAL_S = 0.030
+
 # Setup logger
 logger = logging.getLogger("turbo-whisper.typer")
 if not logger.handlers:
@@ -956,9 +962,10 @@ class Typer:
         Type text character by character via SendInput KEYEVENTF_unicode.
 
         Unlike pyautogui.write(), this is keyboard-layout independent and
-        supports full Unicode (Cyrillic, emoji, etc.). Each character is
-        sent as its own event with typing_delay between characters, which
-        is what picky terminals and games expect from "real" typing.
+        supports full Unicode (Cyrillic, emoji, etc.). One character is
+        sent at a time at a steady CHAR_TYPING_INTERVAL_S pace (no bursts,
+        no acceleration) — this is what picky terminals and games expect
+        from "real" typing, and it renders visibly character by character.
         """
         import time
 
@@ -974,8 +981,8 @@ class Typer:
                 logger.warning("_type_windows_characters: SendInput failed, "
                                "falling back to clipboard paste")
                 return self._type_clipboard_paste(text)
-            if self._typing_delay > 0 and i < n - 1:
-                time.sleep(self._typing_delay)
+            if i < n - 1:
+                time.sleep(CHAR_TYPING_INTERVAL_S)
         return True
 
     def _type_pyautogui(self, text: str) -> bool:
