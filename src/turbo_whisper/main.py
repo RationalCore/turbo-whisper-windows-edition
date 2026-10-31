@@ -1947,6 +1947,13 @@ class TurboWhisper:
         """Show notification when settings are saved."""
         self._show_notification("Turbo Whisper", "Settings saved", QSystemTrayIcon.MessageIcon.Information)
 
+        # Apply typing behavior settings to the typer immediately
+        self.typer.update_settings(
+            typing_delay_ms=self.config.typing_delay_ms,
+            use_character_typing=self.config.use_character_typing,
+            copy_to_clipboard=self.config.copy_to_clipboard,
+        )
+
         # Update floating indicator hotkey
         hotkey_str = "+".join(k.title() for k in self.config.hotkey)
         self._floating_indicator.update_hotkey(hotkey_str)

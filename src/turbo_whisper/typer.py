@@ -129,6 +129,20 @@ class Typer:
         if self.system == "Linux":
             self._setup_linux()
 
+    def update_settings(self, typing_delay_ms: int = None,
+                        use_character_typing: bool = None,
+                        copy_to_clipboard: bool = None) -> None:
+        """Apply changed settings at runtime (called when settings are saved)."""
+        if typing_delay_ms is not None:
+            self._typing_delay = typing_delay_ms / 1000.0
+        if use_character_typing is not None:
+            self._use_character_typing = use_character_typing
+        if copy_to_clipboard is not None:
+            self._copy_to_clipboard = copy_to_clipboard
+        logger.info(f"Typer settings updated: use_character_typing={self._use_character_typing}, "
+                    f"typing_delay={self._typing_delay * 1000:.0f}ms, "
+                    f"copy_to_clipboard={self._copy_to_clipboard}")
+
     def _setup_linux(self) -> None:
         """Set up Linux typing backend (evdev for uinput access)."""
         try:
@@ -279,8 +293,10 @@ class Typer:
         logger.info(f"type_text START: text='{text[:80]}' (len={len(text)}), use_character_typing={self._use_character_typing}")
 
         if self._use_character_typing:
-            # pyautogui.write() can't handle non-ASCII (Cyrillic etc.) — use clipboard paste
-            if any(ord(ch) > 127 for ch in text):
+            # pyautogui (macOS/Linux X11) can't handle non-ASCII — use clipboard
+            # paste there. Windows uses SendInput KEYEVENTF_unicode which types
+            # full Unicode (Cyrillic, emoji) character by character.
+            if self.system != "Windows" and any(ord(ch) > 127 for ch in text):
                 logger.info("type_text: non-ASCII detected, using clipboard paste instead of character typing")
                 result = self._type_clipboard_paste(text)
                 logger.info(f"type_text END: clipboard paste returned {result}")
@@ -928,10 +944,39 @@ class Typer:
         Returns:
             True if successful, False otherwise
         """
-        if self.system == "Windows" or self.system == "Darwin":
+        if self.system == "Windows":
+            return self._type_windows_characters(text)
+        elif self.system == "Darwin":
             return self._type_pyautogui(text)
         else:
             return self._type_linux(text)
+
+    def _type_windows_characters(self, text: str) -> bool:
+        """
+        Type text character by character via SendInput KEYEVENTF_unicode.
+
+        Unlike pyautogui.write(), this is keyboard-layout independent and
+        supports full Unicode (Cyrillic, emoji, etc.). Each character is
+        sent as its own event with typing_delay between characters, which
+        is what picky terminals and games expect from "real" typing.
+        """
+        import time
+
+        # Small delay to let focus settle
+        time.sleep(0.1)
+
+        n = len(text)
+        for i, char in enumerate(text):
+            ok = self._send_unicode_text(char)
+            logger.debug(f"_type_windows_characters: char {i + 1}/{n} "
+                         f"U+{ord(char):04X} -> {ok}")
+            if not ok:
+                logger.warning("_type_windows_characters: SendInput failed, "
+                               "falling back to clipboard paste")
+                return self._type_clipboard_paste(text)
+            if self._typing_delay > 0 and i < n - 1:
+                time.sleep(self._typing_delay)
+        return True
 
     def _type_pyautogui(self, text: str) -> bool:
         """Type text using PyAutoGUI (Windows/macOS)."""
