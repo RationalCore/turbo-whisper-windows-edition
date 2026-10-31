@@ -3,7 +3,13 @@
 # No runtime extraction = no decompression errors on any machine.
 # Collects PyQt6 DLLs/plugins and pyaudio portaudio DLL for portability.
 
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files, copy_metadata
+
+# Generate the exe version resource from pyproject.toml at build time
+# (so the built exe is never anonymous and never carries a stale version).
+import sys
+sys.path.insert(0, SPECPATH)
+from build_version_info import generate_version_info
 
 # Collect only DLLs from PyQt6 (not all Python submodules)
 pyqt6_bins = collect_dynamic_libs('PyQt6')
@@ -22,7 +28,7 @@ a = Analysis(
         ('config.example.json', '.'),
         ('assets\\logo.svg', 'assets'),
         ('src\\turbo_whisper\\assets\\base_hallucination_filter.json', 'turbo_whisper\\assets'),
-    ] + pyqt6_datas,
+    ] + pyqt6_datas + copy_metadata('turbo-whisper'),
     hiddenimports=[
         # PyQt6 — only modules actually used by the codebase
         'PyQt6.QtCore',
@@ -189,7 +195,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon='assets\\logo.ico',
+    version=generate_version_info(),
 )
 
 coll = COLLECT(

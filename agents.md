@@ -4,7 +4,7 @@
 
 Turbo Whisper is a free, open-source voice dictation and transcription app for Windows, Linux, and macOS. It provides real-time speech-to-text (STT) via OpenAI Whisper API with a PyQt6 GUI, global hotkeys, and auto-typing into any focused window.
 
-- **Version:** 1.1.0
+- **Version:** 1.1.1
 - **License:** MIT
 - **Python:** 3.10+
 - **Repo:** https://github.com/RationalCore/turbo-whisper-windows-edition
@@ -81,7 +81,7 @@ Output: `dist/TurboWhisper.exe` (~58 MB, single file)
 - **Clipboard:** Multi-method fallback chain: pyperclip → clip.exe → keybd_event
 - **Typing:** `KEYEVENTF_unicode` for full Cyrillic/Unicode support
 - **Single instance:** `msvcrt` file lock
-- **Admin elevation:** Auto-elevates via `ShellExecuteW("runas")`, `--no-admin` flag to skip
+- **Admin elevation:** None — the app never self-elevates (self-elevation triggers AV trojan heuristics). Run as administrator manually for hotkeys in elevated windows
 - **UAC manifest:** `runw.exe` bootloader (windowless)
 
 ## Config Location
@@ -100,7 +100,7 @@ uv run python -m turbo_whisper.main
 
 ### Run without admin
 ```bash
-dist\TurboWhisper.exe --no-admin
+dist\TurboWhisper.exe
 ```
 
 ### Rebuild after code changes

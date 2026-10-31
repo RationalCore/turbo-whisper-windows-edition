@@ -755,12 +755,9 @@ class RecordingWindow(QWidget):
         self.auto_start_cb.setChecked(self.config.auto_start)
         group_layout.addWidget(self.auto_start_cb)
 
-        self.run_as_admin_cb = QCheckBox("Run as administrator")
-        self.run_as_admin_cb.setChecked(self.config.run_as_admin)
-        group_layout.addWidget(self.run_as_admin_cb)
-        admin_hint = QLabel("Requests admin rights via UAC on startup so hotkeys\n"
-                            "work in elevated windows (e.g. Task Manager, regedit).\n"
-                            "Disable to skip the UAC prompt.")
+        admin_hint = QLabel("Tip: to use hotkeys in elevated windows (Task Manager, regedit),\n"
+                            "run Turbo Whisper as administrator manually (right-click the exe\n"
+                            "or shortcut → Run as administrator).")
         admin_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         admin_hint.setWordWrap(True)
         group_layout.addWidget(admin_hint)
@@ -1357,7 +1354,7 @@ class RecordingWindow(QWidget):
             self.hotkey_key_combo.currentIndexChanged.connect(self._on_hotkey_combo_changed)
         # Behavior checkboxes
         for cb in (self.auto_paste_cb, self.copy_clipboard_cb, self.char_typing_cb,
-                   self.store_recordings_cb, self.auto_start_cb, self.run_as_admin_cb):
+                   self.store_recordings_cb, self.auto_start_cb):
             cb.stateChanged.connect(self._apply_settings)
 
     def _on_hotkey_combo_changed(self) -> None:
@@ -1390,7 +1387,6 @@ class RecordingWindow(QWidget):
         self.config.use_character_typing = self.char_typing_cb.isChecked()
         self.config.store_recordings = self.store_recordings_cb.isChecked()
         self.config.auto_start = self.auto_start_cb.isChecked()
-        self.config.run_as_admin = self.run_as_admin_cb.isChecked()
         # Indicator
         if hasattr(self, 'show_indicator_cb'):
             self.config.show_indicator = self.show_indicator_cb.isChecked()
@@ -2922,35 +2918,13 @@ def _is_admin() -> bool:
         return False
 
 
-def _request_admin_restart() -> bool:
-    """Try to restart with admin privileges via UAC. Returns True if elevation succeeded."""
-    import ctypes
-    if getattr(sys, 'frozen', False):
-        exe = sys.executable
-        params = ""
-    elif os.path.basename(sys.argv[0]) == "main.py":
-        bat = Path(__file__).resolve().parent.parent.parent / "run_turbo_whisper.bat"
-        if bat.exists():
-            exe = str(bat)
-            params = ""
-        else:
-            exe = sys.executable
-            params = '-m turbo_whisper.main'
-    else:
-        exe = sys.executable
-        params = '-m turbo_whisper.main'
-    print("[admin] Requesting elevation (UAC)...", file=sys.stderr)
-    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
-    if result > 32:
-        # Success — new admin process will start, exit this one
-        return True
-    # User cancelled UAC or error — continue in normal mode
-    print("[admin] Elevation cancelled. Running without admin rights.", file=sys.stderr)
-    print("[admin] Hotkeys will NOT work in windows running as administrator.", file=sys.stderr)
-    return False
-
-
 def main():
+    # Print version and exit (useful to verify frozen builds)
+    if "--version" in sys.argv:
+        from turbo_whisper import __version__
+        print(f"Turbo Whisper {__version__}")
+        return
+
     # When launched as a child visualizer process (PyInstaller build),
     # run the visualizer event loop instead of the main app.
     if "--visualizer" in sys.argv:
@@ -2958,15 +2932,14 @@ def main():
         viz_main()
         return
 
-    # Auto-elevate to admin on Windows (required for hotkeys in admin windows)
-    if sys.platform == "win32" and not _is_admin() and "--no-admin" not in sys.argv:
-        try:
-            _cfg = Config.load()
-            should_elevate = _cfg.run_as_admin
-        except Exception:
-            should_elevate = False
-        if should_elevate and _request_admin_restart():
-            sys.exit(0)
+    # NOTE: auto-elevation via ShellExecuteW("runas") was intentionally removed.
+    # Self-elevating executables trigger antivirus trojan heuristics
+    # (PDM:Trojan.Win32.Generic). Users who need hotkeys in elevated windows
+    # can run the app as administrator manually (right-click → Run as admin).
+    if sys.platform == "win32" and not _is_admin():
+        print("[admin] Running without admin rights. Hotkeys will not work in "
+              "elevated windows (run as administrator manually if needed).",
+              file=sys.stderr)
 
     ensure_single_instance()
     app = TurboWhisper()
