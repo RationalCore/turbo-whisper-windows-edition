@@ -118,48 +118,39 @@ def get_stop_icon(size: int = 20, color: str = "#888888") -> QIcon:
     return _svg_to_icon(ICON_STOP, size, color)
 
 
-# V5 Rounded Modern icon — microphone on green background
-_ICON_V5_GREEN = """<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+# App icon (V6): dark-grey microphone with equalizer bars on an
+# indigo -> violet -> cyan gradient. Static: does not change with app state.
+_ICON_APP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.5" y2="1">
-      <stop offset="0%" stop-color="#84cc16"/>
-      <stop offset="100%" stop-color="#4d7c0f"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4F46E5"/>
+      <stop offset="0.55" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#06B6D4"/>
     </linearGradient>
   </defs>
-  <rect x="16" y="16" width="224" height="224" rx="48" ry="48" fill="url(#bg)"/>
-  <rect x="108" y="60" width="40" height="65" rx="20" fill="#ffffff"/>
-  <path d="M88 115 Q88 150 128 150 Q168 150 168 115" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <line x1="128" y1="150" x2="128" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <line x1="105" y1="170" x2="151" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M75 90 Q58 128 75 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <path d="M181 90 Q198 128 181 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <text x="128" y="210" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#ffffff" fill-opacity="0.25" text-anchor="middle">W</text>
-</svg>"""
-
-_ICON_V5_ORANGE = """<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.5" y2="1">
-      <stop offset="0%" stop-color="#f97316"/>
-      <stop offset="100%" stop-color="#c2410c"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="224" height="224" rx="48" ry="48" fill="url(#bg)"/>
-  <rect x="108" y="60" width="40" height="65" rx="20" fill="#ffffff"/>
-  <path d="M88 115 Q88 150 128 150 Q168 150 168 115" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <line x1="128" y1="150" x2="128" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <line x1="105" y1="170" x2="151" y2="170" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M75 90 Q58 128 75 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <path d="M181 90 Q198 128 181 166" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <text x="128" y="210" font-family="Arial,sans-serif" font-size="28" font-weight="bold" fill="#ffffff" fill-opacity="0.25" text-anchor="middle">W</text>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="214.2" y="110" width="83.6" height="171" rx="41.8" fill="#2E3238"/>
+  <path d="M 170.5 243 A 87.4 87.4 0 0 0 341.5 243" stroke="#2E3238" stroke-width="22.8" fill="none" stroke-linecap="round"/>
+  <rect x="245.55" y="324.7" width="20.9" height="41.8" fill="#2E3238"/>
+  <rect x="195.2" y="360.8" width="121.6" height="22.8" rx="11.4" fill="#2E3238"/>
+  <g fill="#F0FDF4">
+    <rect x="92" y="230" width="26" height="110" rx="13"/>
+    <rect x="132" y="186" width="26" height="198" rx="13"/>
+    <rect x="354" y="186" width="26" height="198" rx="13"/>
+    <rect x="394" y="230" width="26" height="110" rx="13"/>
+  </g>
 </svg>"""
 
 
 def get_tray_icon(size: int = 64, recording: bool = False) -> QIcon:
-    """Get the V5 rounded-mic icon for the system tray.
+    """Get the app icon for the system tray.
+
+    The icon is static and deliberately does NOT change color while
+    recording — a recolored tray icon made the app look like a different
+    program. The floating indicator shows the recording state instead.
 
     Args:
         size: Icon size in pixels
-        recording: If True, green. If False, orange.
+        recording: kept for call compatibility, unused
     """
-    svg = _ICON_V5_GREEN if recording else _ICON_V5_ORANGE
-    return _svg_to_icon(svg, size)
+    return _svg_to_icon(_ICON_APP, size)
