@@ -511,7 +511,7 @@ class RecordingWindow(QWidget):
         # Local (offline) recognition gates the API settings below
         self.local_recognition_cb = QCheckBox(tr("Local recognition (offline)"))
         self.local_recognition_cb.setChecked(self.config.local_recognition)
-        self.local_recognition_cb.setToolTip(tr("Transcribe locally: GigaAM for Russian,\nParakeet for other languages. Models are\ndownloaded on first use, then work offline."))
+        self.local_recognition_cb.setToolTip(tr("Transcribe locally with automatic language\ndetection. Models are downloaded on first\nuse, then work offline."))
         self.local_recognition_cb.stateChanged.connect(self._on_local_recognition_toggled)
         api_form.addRow(tr("Engine:"), self.local_recognition_cb)
 

@@ -280,8 +280,8 @@ class WhisperClient:
             payload["prompt"] = prompt.strip()[-1000:]
 
         # Only include language if it's set (not empty)
-        if self.config.language:
-            payload["language"] = self.config.language
+        # NOTE: language is not forced anymore — the model auto-detects it,
+        # which handles mixed speech (e.g. English words in Russian) much better.
         else:
             logger.info("Language not set in config - omitting from API request (auto-detect)")
 

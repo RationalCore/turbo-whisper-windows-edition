@@ -241,7 +241,10 @@ class LocalASR:
 
     @staticmethod
     def engine_for(language: str) -> str:
-        return "gigaam" if language == "ru" else "parakeet"
+        # Parakeet for ALL languages: it auto-detects the language, handles
+        # mixed speech (English words in Russian dictation) and long audio.
+        # GigaAM mangles foreign words and only works up to 25s clips.
+        return "parakeet"
 
     def transcribe(self, wav_bytes: bytes, language: str) -> str:
         name = self.engine_for(language)
