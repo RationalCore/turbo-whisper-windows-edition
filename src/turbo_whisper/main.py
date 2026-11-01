@@ -178,10 +178,12 @@ else:
     import fcntl
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from turbo_whisper.i18n import tr
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -414,9 +416,9 @@ class RecordingWindow(QWidget):
 
         # === Top bar: status + opacity (always visible) ===
         # Status labels kept hidden so set_status/set_recording_hint don't crash
-        self.status_label = QLabel("")
+        self.status_label = QLabel(tr(""))
         self.status_label.hide()
-        self.hints_label = QLabel("")
+        self.hints_label = QLabel(tr(""))
         self.hints_label.hide()
         self._status_dots = 0
         self._status_timer = QTimer()
@@ -495,7 +497,7 @@ class RecordingWindow(QWidget):
         s.setSpacing(4)
 
         # === API ===
-        api_group = QGroupBox("API")
+        api_group = QGroupBox(tr("API"))
         api_group.setStyleSheet(_group_style)
         api_form = QFormLayout(api_group)
         api_form.setContentsMargins(6, 10, 6, 4)
@@ -503,13 +505,13 @@ class RecordingWindow(QWidget):
         api_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.api_url_input = QLineEdit(self.config.api_url)
-        self.api_url_input.setPlaceholderText("https://api.openai.com/v1/audio/transcriptions")
-        api_form.addRow("URL:", self.api_url_input)
+        self.api_url_input.setPlaceholderText(tr("https://api.openai.com/v1/audio/transcriptions"))
+        api_form.addRow(tr("URL:"), self.api_url_input)
 
         key_row = QHBoxLayout()
         self._actual_api_key = self.config.api_key
         self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("sk-...")
+        self.api_key_input.setPlaceholderText(tr("sk-..."))
         self._key_visible = False
         self._update_api_key_display()
         self.api_key_input.textChanged.connect(self._on_api_key_changed)
@@ -518,7 +520,7 @@ class RecordingWindow(QWidget):
         self.key_visible_btn = QPushButton()
         self.key_visible_btn.setIcon(get_eye_icon(16, "#888888"))
         self.key_visible_btn.setFixedSize(28, 28)
-        self.key_visible_btn.setToolTip("Show/hide API key")
+        self.key_visible_btn.setToolTip(tr("Show/hide API key"))
         self.key_visible_btn.setStyleSheet("QPushButton { background: transparent; border: 1px solid #555; border-radius: 4px; }")
         self.key_visible_btn.clicked.connect(self._toggle_key_visibility)
         key_row.addWidget(self.key_visible_btn)
@@ -526,11 +528,11 @@ class RecordingWindow(QWidget):
         self.key_copy_btn = QPushButton()
         self.key_copy_btn.setIcon(get_copy_icon(16, "#888888"))
         self.key_copy_btn.setFixedSize(28, 28)
-        self.key_copy_btn.setToolTip("Copy to clipboard")
+        self.key_copy_btn.setToolTip(tr("Copy to clipboard"))
         self.key_copy_btn.setStyleSheet("QPushButton { background: transparent; border: 1px solid #555; border-radius: 4px; }")
         self.key_copy_btn.clicked.connect(lambda: self._copy_to_clipboard(self._actual_api_key, self.key_copy_btn))
         key_row.addWidget(self.key_copy_btn)
-        api_form.addRow("Key:", key_row)
+        api_form.addRow(tr("Key:"), key_row)
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -540,25 +542,24 @@ class RecordingWindow(QWidget):
         self.model_combo.setCurrentText(self.config.model)
         self.model_combo.currentIndexChanged.connect(self._apply_settings)
         self.model_combo.editTextChanged.connect(self._apply_settings)
-        api_form.addRow("Model:", self.model_combo)
+        api_form.addRow(tr("Model:"), self.model_combo)
         self._fetch_models_async()
 
         self.language_combo = QComboBox()
-        languages = [("Russian", "ru"), ("English", "en"), ("German", "de"), ("French", "fr"),
-                     ("Spanish", "es"), ("Italian", "it"), ("Portuguese", "pt"), ("Chinese", "zh"),
-                     ("Japanese", "ja"), ("Korean", "ko"), ("Auto-detect", "")]
-        for name, code in languages:
+        from turbo_whisper.i18n import LANGUAGES
+        for code, name in sorted(LANGUAGES.items(), key=lambda kv: kv[1]):
             self.language_combo.addItem(name, code)
+        sel = self.config.ui_language or self.config.language or "en"
         for i in range(self.language_combo.count()):
-            if self.language_combo.itemData(i) == self.config.language:
+            if self.language_combo.itemData(i) == sel:
                 self.language_combo.setCurrentIndex(i)
                 break
-        api_form.addRow("Language:", self.language_combo)
+        api_form.addRow(tr("Language:"), self.language_combo)
 
         s.addWidget(api_group)
 
         # === Audio ===
-        audio_group = QGroupBox("Audio")
+        audio_group = QGroupBox(tr("Audio"))
         audio_group.setStyleSheet(_group_style)
         audio_form = QFormLayout(audio_group)
         audio_form.setContentsMargins(6, 10, 6, 4)
@@ -567,10 +568,10 @@ class RecordingWindow(QWidget):
 
         self.mic_combo = QComboBox()
         self._populate_mic_dropdown()
-        audio_form.addRow("Mic:", self.mic_combo)
+        audio_form.addRow(tr("Mic:"), self.mic_combo)
 
         gain_row = QHBoxLayout()
-        self.gain_value_label = QLabel("100%")
+        self.gain_value_label = QLabel(tr("100%"))
         self.gain_value_label.setStyleSheet("color: #0078d4; font-weight: bold;")
         self.gain_value_label.setFixedWidth(36)
         self.gain_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -584,24 +585,23 @@ class RecordingWindow(QWidget):
         self._update_sensitivity_style()
         gain_row.addWidget(self.sensitivity_slider)
         gain_row.addWidget(self.gain_value_label)
-        audio_form.addRow("Gain:", gain_row)
-        gain_hint = QLabel("Microphone volume boost. 100% = normal, higher amplifies\n"
-                           "quiet mics. If the waveform is always flat, increase gain.")
+        audio_form.addRow(tr("Gain:"), gain_row)
+        gain_hint = QLabel(tr("Microphone volume boost. 100% = normal, higher amplifies\n") + tr("quiet mics. If the waveform is always flat, increase gain."))
         gain_hint.setStyleSheet("color: #888; font-size: 10px;")
         gain_hint.setWordWrap(True)
-        audio_form.addRow("", gain_hint)
+        audio_form.addRow(tr(""), gain_hint)
 
         s.addWidget(audio_group)
 
         # === Indicator ===
-        indicator_group = QGroupBox("Indicator")
+        indicator_group = QGroupBox(tr("Indicator"))
         indicator_group.setStyleSheet(_group_style)
         indicator_form = QVBoxLayout(indicator_group)
         indicator_form.setContentsMargins(6, 10, 6, 4)
         indicator_form.setSpacing(4)
-        self.show_indicator_cb = QCheckBox("Show floating indicator")
+        self.show_indicator_cb = QCheckBox(tr("Show floating indicator"))
         self.show_indicator_cb.setChecked(self.config.show_indicator)
-        self.show_indicator_cb.setToolTip("Show/hide the floating waveform indicator on screen")
+        self.show_indicator_cb.setToolTip(tr("Show/hide the floating waveform indicator on screen"))
         self.show_indicator_cb.stateChanged.connect(self._handle_indicator_toggle)
         indicator_form.addWidget(self.show_indicator_cb)
 
@@ -618,11 +618,11 @@ class RecordingWindow(QWidget):
         self.opacity_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         opacity_row.addWidget(self.opacity_slider)
         opacity_row.addWidget(self.opacity_value_label)
-        opacity_label = QLabel("Opacity:")
+        opacity_label = QLabel(tr("Opacity:"))
         opacity_label.setStyleSheet("font-size: 11px;")
         indicator_form.addWidget(opacity_label)
         indicator_form.addLayout(opacity_row)
-        opacity_hint = QLabel("15 = nearly invisible, 255 = fully opaque.")
+        opacity_hint = QLabel(tr("15 = nearly invisible, 255 = fully opaque."))
         opacity_hint.setStyleSheet("color: #888; font-size: 10px;")
         opacity_hint.setWordWrap(True)
         indicator_form.addWidget(opacity_hint)
@@ -630,7 +630,7 @@ class RecordingWindow(QWidget):
         s.addWidget(indicator_group)
 
         # === Hotkey ===
-        hotkey_group = QGroupBox("Hotkey")
+        hotkey_group = QGroupBox(tr("Hotkey"))
         hotkey_group.setStyleSheet(_group_style)
         hotkey_form = QFormLayout(hotkey_group)
         hotkey_form.setContentsMargins(6, 10, 6, 4)
@@ -662,7 +662,7 @@ class RecordingWindow(QWidget):
         self.hotkey_modifier_combo.currentIndexChanged.connect(self._update_hotkey_preview)
 
         self.hotkey_key_input = QLineEdit()
-        self.hotkey_key_input.setPlaceholderText("e.g. F8, ~, A")
+        self.hotkey_key_input.setPlaceholderText(tr("e.g. F8, ~, A"))
         self.hotkey_key_input.setMaximumWidth(100)
         self.hotkey_key_input.setStyleSheet(
             "QLineEdit { background-color: #ffffff; border: 1px solid #cccccc; "
@@ -675,14 +675,12 @@ class RecordingWindow(QWidget):
         self.hotkey_preview.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold;")
         hotkey_row.addWidget(self.hotkey_preview)
 
-        hotkey_form.addRow("Key:", hotkey_row)
+        hotkey_form.addRow(tr("Key:"), hotkey_row)
         self._update_hotkey_display()
-        hotkey_hint = QLabel("Single-char keys (e.g. ~) use double-tap to dictate.\n"
-                             "Modifier combos (e.g. Ctrl+Space) fire on single press.\n"
-                             "Requires admin rights to work in elevated windows.")
+        hotkey_hint = QLabel(tr("Single-char keys (e.g. ~) use double-tap to dictate.\n") + tr("Modifier combos (e.g. Ctrl+Space) fire on single press.\n") + tr("Requires admin rights to work in elevated windows."))
         hotkey_hint.setStyleSheet("color: #888; font-size: 10px;")
         hotkey_hint.setWordWrap(True)
-        hotkey_form.addRow("", hotkey_hint)
+        hotkey_form.addRow(tr(""), hotkey_hint)
 
         s.addWidget(hotkey_group)
 
@@ -712,53 +710,45 @@ class RecordingWindow(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(4)
 
-        group = QGroupBox("Behavior")
+        group = QGroupBox(tr("Behavior"))
         group.setStyleSheet(_group_style)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(6, 10, 6, 4)
         group_layout.setSpacing(2)
 
-        self.auto_paste_cb = QCheckBox("Auto-type transcription")
+        self.auto_paste_cb = QCheckBox(tr("Auto-type transcription"))
         self.auto_paste_cb.setChecked(self.config.auto_paste)
         group_layout.addWidget(self.auto_paste_cb)
-        auto_paste_hint = QLabel("Types the transcribed text directly into whatever\n"
-                                 "window was focused before recording. Disable if you\n"
-                                 "only want clipboard copy.")
+        auto_paste_hint = QLabel(tr("Types the transcribed text directly into whatever\n") + tr("window was focused before recording. Disable if you\n") + tr("only want clipboard copy."))
         auto_paste_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         auto_paste_hint.setWordWrap(True)
         group_layout.addWidget(auto_paste_hint)
 
-        self.copy_clipboard_cb = QCheckBox("Copy to clipboard")
+        self.copy_clipboard_cb = QCheckBox(tr("Copy to clipboard"))
         self.copy_clipboard_cb.setChecked(self.config.copy_to_clipboard)
         group_layout.addWidget(self.copy_clipboard_cb)
 
-        self.char_typing_cb = QCheckBox("Character-by-character typing")
+        self.char_typing_cb = QCheckBox(tr("Character-by-character typing"))
         self.char_typing_cb.setChecked(self.config.use_character_typing)
         group_layout.addWidget(self.char_typing_cb)
-        char_hint = QLabel("Simulates individual keystrokes instead of clipboard\n"
-                           "paste (Ctrl+V). Types at a steady speed of ~33 characters\n"
-                           "per second, one character at a time. Works in apps that\n"
-                           "don't accept paste, like some remote desktops.")
+        char_hint = QLabel(tr("Simulates individual keystrokes instead of clipboard\n") + tr("paste (Ctrl+V). Types at a steady speed of ~33 characters\n") + tr("per second, one character at a time. Works in apps that\n") + tr("don't accept paste, like some remote desktops."))
         char_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         char_hint.setWordWrap(True)
         group_layout.addWidget(char_hint)
 
-        self.store_recordings_cb = QCheckBox("Save recordings with history")
+        self.store_recordings_cb = QCheckBox(tr("Save recordings with history"))
         self.store_recordings_cb.setChecked(self.config.store_recordings)
         group_layout.addWidget(self.store_recordings_cb)
-        record_hint = QLabel("Saves the audio WAV file alongside each transcription\n"
-                             "so you can replay it later from the History tab.")
+        record_hint = QLabel(tr("Saves the audio WAV file alongside each transcription\n") + tr("so you can replay it later from the History tab."))
         record_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         record_hint.setWordWrap(True)
         group_layout.addWidget(record_hint)
 
-        self.auto_start_cb = QCheckBox("Run on Windows startup")
+        self.auto_start_cb = QCheckBox(tr("Run on Windows startup"))
         self.auto_start_cb.setChecked(self.config.auto_start)
         group_layout.addWidget(self.auto_start_cb)
 
-        admin_hint = QLabel("Tip: to use hotkeys in elevated windows (Task Manager, regedit),\n"
-                            "run Turbo Whisper as administrator manually (right-click the exe\n"
-                            "or shortcut → Run as administrator).")
+        admin_hint = QLabel(tr("Tip: to use hotkeys in elevated windows (Task Manager, regedit),\n") + tr("run Turbo Whisper as administrator manually (right-click the exe\n") + tr("or shortcut → Run as administrator)."))
         admin_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         admin_hint.setWordWrap(True)
         group_layout.addWidget(admin_hint)
@@ -796,25 +786,23 @@ class RecordingWindow(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(4)
 
-        group = QGroupBox("Streaming")
+        group = QGroupBox(tr("Streaming"))
         group.setStyleSheet(_group_style)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(6, 10, 6, 4)
         group_layout.setSpacing(4)
 
-        self.streaming_cb = QCheckBox("Enable streaming (transcribe as you speak)")
+        self.streaming_cb = QCheckBox(tr("Enable streaming (transcribe as you speak)"))
         self.streaming_cb.setChecked(self.config.streaming_mode)
         self.streaming_cb.setToolTip(
-            "When enabled, transcribes audio in real-time as you speak.\n"
-            "Words appear in the target window within 1-2 seconds.\n"
-            "Window stays visible during recording with live status updates."
+            tr("When enabled, transcribes audio in real-time as you speak.\n") + tr("Words appear in the target window within 1-2 seconds.\n") + tr("Window stays visible during recording with live status updates.")
         )
         self.streaming_cb.stateChanged.connect(self._on_streaming_mode_changed)
         group_layout.addWidget(self.streaming_cb)
 
         # Chunk length (target duration of each transcription chunk)
         chunk_row = QHBoxLayout()
-        self.chunk_label = QLabel("Chunk:")
+        self.chunk_label = QLabel(tr("Chunk:"))
         self.chunk_label.setFixedWidth(56)
         self.chunk_slider = QSlider(Qt.Orientation.Horizontal)
         self.chunk_slider.setRange(20, 60)  # 2.0s .. 6.0s (tenths)
@@ -831,9 +819,7 @@ class RecordingWindow(QWidget):
         chunk_row.addWidget(self.chunk_slider)
         chunk_row.addWidget(self.chunk_value_label)
         group_layout.addLayout(chunk_row)
-        chunk_hint = QLabel("Target length of each chunk sent for transcription.\n"
-                            "Chunks are cut at speech pauses near this length.\n"
-                            "Shorter = faster text, longer = fewer cuts.")
+        chunk_hint = QLabel(tr("Target length of each chunk sent for transcription.\n") + tr("Chunks are cut at speech pauses near this length.\n") + tr("Shorter = faster text, longer = fewer cuts."))
         chunk_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
         chunk_hint.setWordWrap(True)
         self.chunk_hint = chunk_hint
@@ -841,7 +827,7 @@ class RecordingWindow(QWidget):
 
         # Pause threshold
         silence_row = QHBoxLayout()
-        self.silence_label = QLabel("Pause:")
+        self.silence_label = QLabel(tr("Pause:"))
         self.silence_label.setFixedWidth(56)
         self.silence_slider = QSlider(Qt.Orientation.Horizontal)
         self.silence_slider.setRange(150, 600)
@@ -858,10 +844,7 @@ class RecordingWindow(QWidget):
         silence_row.addWidget(self.silence_slider)
         silence_row.addWidget(self.silence_value_label)
         group_layout.addLayout(silence_row)
-        silence_hint = QLabel("How long a pause must be to end a chunk and to\n"
-                              "wait after you stop speaking before processing.\n"
-                              "Lower = faster response and more chunk cuts,\n"
-                              "higher = fewer cuts at short pauses.")
+        silence_hint = QLabel(tr("How long a pause must be to end a chunk and to\n") + tr("wait after you stop speaking before processing.\n") + tr("Lower = faster response and more chunk cuts,\n") + tr("higher = fewer cuts at short pauses."))
         silence_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
         silence_hint.setWordWrap(True)
         self.silence_hint = silence_hint
@@ -869,7 +852,7 @@ class RecordingWindow(QWidget):
 
         # Auto-stop timeout
         timeout_row = QHBoxLayout()
-        self.timeout_label = QLabel("Timeout:")
+        self.timeout_label = QLabel(tr("Timeout:"))
         self.timeout_label.setFixedWidth(56)
         self.timeout_slider = QSlider(Qt.Orientation.Horizontal)
         self.timeout_slider.setRange(0, 30)
@@ -887,16 +870,14 @@ class RecordingWindow(QWidget):
         timeout_row.addWidget(self.timeout_slider)
         timeout_row.addWidget(self.timeout_value_label)
         group_layout.addLayout(timeout_row)
-        timeout_hint = QLabel("Auto-stops recording after this many seconds of\n"
-                              "silence (after speech was detected). Set to 0 to\n"
-                              "disable — you'll stop manually with the hotkey.")
+        timeout_hint = QLabel(tr("Auto-stops recording after this many seconds of\n") + tr("silence (after speech was detected). Set to 0 to\n") + tr("disable — you'll stop manually with the hotkey."))
         timeout_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
         timeout_hint.setWordWrap(True)
         group_layout.addWidget(timeout_hint)
 
         # Max recording duration (batch mode)
         max_row = QHBoxLayout()
-        max_label = QLabel("Max rec:")
+        max_label = QLabel(tr("Max rec:"))
         max_label.setFixedWidth(56)
         self.max_slider = QSlider(Qt.Orientation.Horizontal)
         self.max_slider.setRange(0, 600)
@@ -914,9 +895,7 @@ class RecordingWindow(QWidget):
         max_row.addWidget(self.max_slider)
         max_row.addWidget(self.max_value_label)
         group_layout.addLayout(max_row)
-        max_hint = QLabel("Maximum recording duration in batch mode.\n"
-                          "Set to 0 for unlimited. Prevents accidentally\n"
-                          "leaving the mic on for too long.")
+        max_hint = QLabel(tr("Maximum recording duration in batch mode.\n") + tr("Set to 0 for unlimited. Prevents accidentally\n") + tr("leaving the mic on for too long."))
         max_hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 56px;")
         max_hint.setWordWrap(True)
         group_layout.addWidget(max_hint)
@@ -944,7 +923,7 @@ class RecordingWindow(QWidget):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        self.clear_history_btn = QPushButton("Clear History")
+        self.clear_history_btn = QPushButton(tr("Clear History"))
         self.clear_history_btn.setStyleSheet(
             "QPushButton { background-color: #666; color: #fff; border: none; "
             "border-radius: 4px; font-size: 10px; padding: 6px 14px; }"
@@ -1048,7 +1027,7 @@ class RecordingWindow(QWidget):
 
         # Set key input (keep original case for special keys like F8, use uppercase for letters)
         if main_key == "~":
-            self.hotkey_key_input.setText("~")
+            self.hotkey_key_input.setText(tr("~"))
         else:
             self.hotkey_key_input.setText(main_key.upper() if main_key else "")
 
@@ -1096,7 +1075,7 @@ class RecordingWindow(QWidget):
     def _update_hotkey_preview(self) -> None:
         """Update hotkey preview label."""
         hotkey = self._build_hotkey_from_ui()
-        self.hotkey_preview.setText("→ " + "+".join(k.title() for k in hotkey))
+        self.hotkey_preview.setText(tr("→ ") + "+".join(k.title() for k in hotkey))
 
     def _build_hotkey_from_ui(self) -> list[str]:
         """Build hotkey list from UI controls."""
@@ -1242,7 +1221,7 @@ class RecordingWindow(QWidget):
         from turbo_whisper.recorder import get_pipewire_sources
 
         self.mic_combo.clear()
-        self.mic_combo.addItem("System Default", None)
+        self.mic_combo.addItem(tr("System Default"), None)
 
         if sys.platform.startswith("linux"):
             pw_sources = get_pipewire_sources()
@@ -1276,7 +1255,7 @@ class RecordingWindow(QWidget):
         """Fetch available transcription models from API in background."""
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        self.model_combo.addItem("Loading...")
+        self.model_combo.addItem(tr("Loading..."))
         self.model_combo.setEnabled(False)
         self.model_combo.blockSignals(False)
 
@@ -1376,7 +1355,14 @@ class RecordingWindow(QWidget):
         model_text = self.model_combo.currentText()
         if model_text != "Loading...":
             self.config.model = model_data if model_data else model_text
-        self.config.language = self.language_combo.currentData()
+        lang = self.language_combo.currentData()
+        prev = self.config.ui_language or self.config.language or "en"
+        self.config.language = lang
+        self.config.ui_language = lang
+        from turbo_whisper.i18n import set_language
+        set_language(lang)
+        if lang != prev and getattr(self, "_on_language_changed", None):
+            self._on_language_changed()
         # Audio
         self.config.input_device_index = self.mic_combo.currentData()
         self.config.input_device_name = self.mic_combo.currentText()
@@ -1471,7 +1457,7 @@ class RecordingWindow(QWidget):
 
     def _copy_history_item(self, text: str) -> None:
         self._copy_to_clipboard(text)
-        self.set_status("Copied!")
+        self.set_status(tr("Copied!"))
 
     def _play_audio(self, filename: str, button: QPushButton) -> None:
         from PyQt6.QtCore import QUrl
@@ -1480,13 +1466,13 @@ class RecordingWindow(QWidget):
         if hasattr(self, "_playing_button") and self._playing_button == button:
             self._media_player.stop()
             button.setIcon(get_play_icon(14, "#888"))
-            button.setToolTip("Play recording")
+            button.setToolTip(tr("Play recording"))
             self._playing_button = None
             return
 
         audio_path = self.config.get_recordings_dir() / filename
         if not audio_path.exists():
-            self.set_status("Audio file not found")
+            self.set_status(tr("Audio file not found"))
             return
 
         if not hasattr(self, "_media_player"):
@@ -1497,11 +1483,11 @@ class RecordingWindow(QWidget):
 
         if hasattr(self, "_playing_button") and self._playing_button:
             self._playing_button.setIcon(get_play_icon(14, "#888"))
-            self._playing_button.setToolTip("Play recording")
+            self._playing_button.setToolTip(tr("Play recording"))
         self._media_player.stop()
 
         button.setIcon(get_stop_icon(14, "#888"))
-        button.setToolTip("Stop playback")
+        button.setToolTip(tr("Stop playback"))
         self._playing_button = button
         self._media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
         self._audio_output.setVolume(1.0)
@@ -1512,7 +1498,7 @@ class RecordingWindow(QWidget):
         if state == QMediaPlayer.PlaybackState.StoppedState:
             if hasattr(self, "_playing_button") and self._playing_button:
                 self._playing_button.setIcon(get_play_icon(14, "#888"))
-                self._playing_button.setToolTip("Play recording")
+                self._playing_button.setToolTip(tr("Play recording"))
                 self._playing_button = None
 
     def _close_window(self) -> None:
@@ -1553,6 +1539,45 @@ class RecordingWindow(QWidget):
         self._drag_pos = None
 
 
+class LanguageDialog(QDialog):
+    """First-run language picker.
+
+    Labels are language names in their own scripts, so the dialog itself
+    needs no translation.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Turbo Whisper"))
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+
+        title = QLabel(tr("Select your language  /  Выберите язык"))
+        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self.listw = QListWidget()
+        from turbo_whisper.i18n import LANGUAGES
+        for code, name in sorted(LANGUAGES.items(), key=lambda kv: kv[1]):
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, code)
+            self.listw.addItem(item)
+        self.listw.itemDoubleClicked.connect(lambda _: self.accept())
+        layout.addWidget(self.listw)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        ok = QPushButton(tr("OK"))
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+
+    def selected_language(self) -> str:
+        item = self.listw.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else "en"
+
+
 class TurboWhisper:
     """Main application class."""
 
@@ -1567,6 +1592,18 @@ class TurboWhisper:
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setWindowIcon(get_tray_icon(128, recording=False))
 
+        # First run: pick the app language (drives UI + transcription)
+        if not self.config.ui_language:
+            dlg = LanguageDialog()
+            if dlg.exec():
+                code = dlg.selected_language()
+                self.config.ui_language = code
+                self.config.language = code
+                self.config.save()
+                from turbo_whisper.i18n import set_language
+                set_language(code)
+                logger.info(f"First run: language selected: {code}")
+
         self.recorder = AudioRecorder(self.config)
         self.client = WhisperClient(self.config)
         self.typer = Typer(
@@ -1577,11 +1614,7 @@ class TurboWhisper:
         self.signals = SignalBridge()
 
         self.window = RecordingWindow(self.config)
-        self.window._on_focus_change = self._on_window_focus_change
-        self.window._on_hotkey_changed = self._restart_hotkey_manager
-        self.window._on_settings_saved = self._on_settings_saved
-        self.window._on_indicator_toggled = self._on_indicator_toggled
-        self.window.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        self._wire_window()
         self._setup_tray()
 
         self.is_recording = False
@@ -1684,12 +1717,35 @@ class TurboWhisper:
         self.tray.setVisible(False)
         QTimer.singleShot(200, lambda: self.tray.setVisible(True))
 
+    def _wire_window(self) -> None:
+        """Connect the settings window callbacks to the app."""
+        self.window._on_focus_change = self._on_window_focus_change
+        self.window._on_hotkey_changed = self._restart_hotkey_manager
+        self.window._on_settings_saved = self._on_settings_saved
+        self.window._on_indicator_toggled = self._on_indicator_toggled
+        self.window._on_language_changed = self._on_language_changed
+        self.window.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+
+    def _on_language_changed(self) -> None:
+        """Language changed in settings — retranslate all visible UI."""
+        QTimer.singleShot(0, self._retranslate_ui)
+
+    def _retranslate_ui(self) -> None:
+        was_visible = self.window.isVisible()
+        self.window.hide()
+        self.window.deleteLater()
+        self.window = RecordingWindow(self.config)
+        self._wire_window()
+        self._retranslate_tray()
+        if was_visible:
+            self.window.show()
+
     def _setup_tray(self) -> None:
         """Set up system tray with improved menu."""
         self.tray = QSystemTrayIcon(self.app)
         self.tray.setIcon(get_tray_icon(64, recording=False))
         hotkey_str = "+".join(k.capitalize() for k in self.config.hotkey)
-        self.tray.setToolTip(f"Turbo Whisper - Press {hotkey_str} to dictate")
+        self.tray.setToolTip(tr("Turbo Whisper - Press {hotkey_str} to dictate").replace("{hotkey_str}", hotkey_str))
 
         # Make tray icon always visible (Windows may hide it by default)
         self.tray.setVisible(True)
@@ -1697,12 +1753,12 @@ class TurboWhisper:
         menu = QMenu()
 
         # Settings
-        show_action = QAction("Settings", menu)
-        show_action.triggered.connect(self._show_window)
-        menu.addAction(show_action)
+        self.show_action = QAction(tr("Settings"), menu)
+        self.show_action.triggered.connect(self._show_window)
+        menu.addAction(self.show_action)
 
         # Show/Hide Indicator
-        self.indicator_action = QAction("Show Indicator", menu)
+        self.indicator_action = QAction(tr("Show Indicator"), menu)
         self.indicator_action.setCheckable(True)
         self.indicator_action.setChecked(True)
         self._indicator_from_action = False
@@ -1714,7 +1770,7 @@ class TurboWhisper:
         self.toggle_action.triggered.connect(self._toggle_recording)
 
         # Streaming mode toggle
-        self.streaming_action = QAction("Streaming Mode", menu)
+        self.streaming_action = QAction(tr("Streaming Mode"), menu)
         self.streaming_action.setCheckable(True)
         self.streaming_action.setChecked(self.config.streaming_mode)
         self.streaming_action.triggered.connect(self._toggle_streaming_mode)
@@ -1723,20 +1779,34 @@ class TurboWhisper:
         menu.addSeparator()
 
         # Copy last transcription
-        self.copy_last_action = QAction("Copy Last Transcription", menu)
+        self.copy_last_action = QAction(tr("Copy Last Transcription"), menu)
         self.copy_last_action.triggered.connect(self._copy_last_transcription)
         menu.addAction(self.copy_last_action)
 
         menu.addSeparator()
 
         # Quit
-        quit_action = QAction("Quit", menu)
-        quit_action.triggered.connect(self._quit)
-        menu.addAction(quit_action)
+        self.quit_action = QAction(tr("Quit"), menu)
+        self.quit_action.triggered.connect(self._quit)
+        menu.addAction(self.quit_action)
 
         self._tray_menu = menu
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+
+    def _retranslate_tray(self) -> None:
+        """Update tray texts after a language change."""
+        hotkey_str = "+".join(k.capitalize() for k in self.config.hotkey)
+        self.tray.setToolTip(tr("Turbo Whisper - Press {hotkey_str} to dictate").replace("{hotkey_str}", hotkey_str))
+        self.show_action.setText(tr("Settings"))
+        self.indicator_action.setText(tr("Show Indicator"))
+        self.streaming_action.setText(tr("Streaming Mode"))
+        self.copy_last_action.setText(tr("Copy Last Transcription"))
+        self.quit_action.setText(tr("Quit"))
+        if self.is_recording:
+            self.toggle_action.setText(tr("Stop Recording"))
+        else:
+            self.toggle_action.setText(f"{tr('Start Recording')} ({hotkey_str})")
 
     def _toggle_streaming_mode(self) -> None:
         """Toggle streaming mode from tray menu."""
@@ -1875,7 +1945,7 @@ class TurboWhisper:
         if self.is_processing:
             print("_on_processing_timeout: processing watchdog triggered, resetting flag")
             self.is_processing = False
-            self._show_notification("Turbo Whisper", "Processing timed out, you can record again",
+            self._show_notification("Turbo Whisper", tr("Processing timed out, you can record again"),
                                     QSystemTrayIcon.MessageIcon.Warning)
 
     def _save_wav(self, path, audio_data: bytes) -> None:
@@ -1899,7 +1969,7 @@ class TurboWhisper:
             )
             return
         self._update_icons(recording=False)
-        self.window.set_status("Ready", animate=False)
+        self.window.set_status(tr("Ready"), animate=False)
         self.window.center_on_screen()
         self.window.show()
         self.window.raise_()
@@ -1946,7 +2016,7 @@ class TurboWhisper:
 
     def _on_settings_saved(self) -> None:
         """Show notification when settings are saved."""
-        self._show_notification("Turbo Whisper", "Settings saved", QSystemTrayIcon.MessageIcon.Information)
+        self._show_notification("Turbo Whisper", tr("Settings saved"), QSystemTrayIcon.MessageIcon.Information)
 
         # Apply typing behavior settings to the typer immediately
         self.typer.update_settings(
@@ -2040,7 +2110,7 @@ class TurboWhisper:
             thread = self._processing_thread
             if thread is not None and thread.is_alive():
                 print(f"_toggle_recording: still processing, rejecting toggle at {now:.3f}")
-                self._floating_indicator.set_status("Still processing...", "#f59e0b")
+                self._floating_indicator.set_status(tr("Still processing..."), "#f59e0b")
                 return
             else:
                 print("_toggle_recording: processing flag stuck, resetting")
@@ -2065,7 +2135,7 @@ class TurboWhisper:
 
         print("_start_recording: starting...")
         self.is_recording = True
-        self.toggle_action.setText("Stop Recording")
+        self.toggle_action.setText(tr("Stop Recording"))
         self._update_icons(recording=True)
 
         # Show the indicator for the duration of the activity (also when the
@@ -2074,7 +2144,7 @@ class TurboWhisper:
 
         # Update floating indicator
         if self.config.streaming_mode:
-            self._floating_indicator.set_status("Listening...", "#84cc16")
+            self._floating_indicator.set_status(tr("Listening..."), "#84cc16")
         else:
             hotkey_str = "+".join(k.capitalize() for k in self.config.hotkey)
             self._floating_indicator.set_status(f"Press {hotkey_str} to stop", "#84cc16")
@@ -2128,12 +2198,12 @@ class TurboWhisper:
             except Exception as e:
                 logger.error(f"Microphone error: {e}")
                 self.is_recording = False
-                self.toggle_action.setText("Start Recording")
+                self.toggle_action.setText(tr("Start Recording"))
                 self._update_icons(recording=False)
                 self._waveform_timer.stop()
-                self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+                self._floating_indicator.set_status(tr("Mic error"), "#ef4444", "Check microphone connection")
                 self._finish_indicator_activity()
-                self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
+                self._show_notification("Turbo Whisper", tr("Microphone error — check microphone connection"),
                                         QSystemTrayIcon.MessageIcon.Critical)
 
     def _start_streaming_recording(self) -> None:
@@ -2184,19 +2254,19 @@ class TurboWhisper:
             )
             logger.info("Streaming recording started successfully")
             # Show floating indicator
-            self._floating_indicator.set_status("Listening...", "#84cc16")
+            self._floating_indicator.set_status(tr("Listening..."), "#84cc16")
             self._floating_indicator.start()
         except Exception as e:
             logger.error(f"Streaming recording FAILED: {e}")
             self.is_recording = False
-            self.toggle_action.setText("Start Recording")
+            self.toggle_action.setText(tr("Start Recording"))
             self._update_icons(recording=False)
             self._waveform_timer.stop()
             self._chunk_order_timer.stop()
             self.window.hide()
-            self._floating_indicator.set_status("Mic error", "#ef4444", "Check microphone connection")
+            self._floating_indicator.set_status(tr("Mic error"), "#ef4444", "Check microphone connection")
             self._finish_indicator_activity()
-            self._show_notification("Turbo Whisper", "Microphone error — check microphone connection",
+            self._show_notification("Turbo Whisper", tr("Microphone error — check microphone connection"),
                                     QSystemTrayIcon.MessageIcon.Critical)
 
     def _on_auto_stop(self) -> None:
@@ -2242,7 +2312,7 @@ class TurboWhisper:
 
                 self.signals.show_status.emit(f"Transcribing chunk #{chunk_seq}...")
                 if self.is_recording:
-                    self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+                    self._floating_indicator.set_status(tr("Transcribing..."), "#f59e0b")
 
                 context = self._current_session_text[-300:] if self._current_session_text else ""
                 logger.info(f"transcribe_chunk #{chunk_seq}: calling API "
@@ -2311,7 +2381,7 @@ class TurboWhisper:
                         self._stop_recording()
                         self._show_notification(
                             "Turbo Whisper",
-                            "Recording stopped — target window lost focus",
+                            tr("Recording stopped — target window lost focus"),
                             QSystemTrayIcon.MessageIcon.Information
                         )
                         return
@@ -2399,16 +2469,16 @@ class TurboWhisper:
                 # Keep showing the transcription state while more chunks are
                 # still being transcribed
                 if self._chunk_worker_busy or not self._chunk_input_queue.empty():
-                    self._floating_indicator.set_status("Transcribing...", "#f59e0b")
+                    self._floating_indicator.set_status(tr("Transcribing..."), "#f59e0b")
                 else:
-                    self._floating_indicator.set_status("Listening...", "#84cc16")
+                    self._floating_indicator.set_status(tr("Listening..."), "#84cc16")
 
     def _cancel_recording(self) -> None:
         """Cancel recording and clean up."""
         if not self.is_recording:
             return
         self.is_recording = False
-        self.toggle_action.setText("Start Recording")
+        self.toggle_action.setText(tr("Start Recording"))
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
@@ -2421,7 +2491,7 @@ class TurboWhisper:
             self.window.hide()
 
         # Update floating indicator
-        self._floating_indicator.set_status("Cancelled", "#f59e0b")
+        self._floating_indicator.set_status(tr("Cancelled"), "#f59e0b")
         QTimer.singleShot(1500, self._floating_indicator.set_idle)
         self._finish_indicator_activity()
 
@@ -2436,12 +2506,12 @@ class TurboWhisper:
 
         # Show stopping indicator immediately
         if self.config.streaming_mode:
-            self._floating_indicator.set_status("Finishing...", "#f59e0b")
+            self._floating_indicator.set_status(tr("Finishing..."), "#f59e0b")
         else:
-            self._floating_indicator.set_status("Stopping...", "#f59e0b")
+            self._floating_indicator.set_status(tr("Stopping..."), "#f59e0b")
 
         self.is_recording = False
-        self.toggle_action.setText("Start Recording")
+        self.toggle_action.setText(tr("Start Recording"))
         self._update_icons(recording=False)
         self._waveform_timer.stop()
         self._auto_stop_timer.stop()
@@ -2461,9 +2531,9 @@ class TurboWhisper:
         logger.warning(f"Microphone capture failed: {error}; finishing captured audio")
         popup = QMessageBox()
         popup.setIcon(QMessageBox.Icon.Warning)
-        popup.setWindowTitle("Microphone disconnected")
-        popup.setText("Recording stopped because the microphone disconnected.")
-        popup.setInformativeText("Captured audio is being transcribed.")
+        popup.setWindowTitle(tr("Microphone disconnected"))
+        popup.setText(tr("Recording stopped because the microphone disconnected."))
+        popup.setInformativeText(tr("Captured audio is being transcribed."))
         popup.setStandardButtons(QMessageBox.StandardButton.Ok)
         popup.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
         popup.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -2488,7 +2558,7 @@ class TurboWhisper:
             self._chunk_order_timer.stop()
             if self.recorder.is_recording:
                 self.recorder.stop()
-            self._floating_indicator.set_status("Cancelled", "#f59e0b")
+            self._floating_indicator.set_status(tr("Cancelled"), "#f59e0b")
             QTimer.singleShot(1500, self._floating_indicator.set_idle)
             self._finish_indicator_activity()
             self.window.hide()
@@ -2509,7 +2579,7 @@ class TurboWhisper:
         audio_data = self.recorder.stop()
 
         # 4. Show Finishing... while we process remaining
-        self._floating_indicator.set_status("Finishing...", "#f59e0b")
+        self._floating_indicator.set_status(tr("Finishing..."), "#f59e0b")
         self._floating_indicator.set_processing()
 
         # 5. Wait for the transcription worker to drain queued chunks (max 10s)
@@ -2568,9 +2638,9 @@ class TurboWhisper:
 
         # Show summary on floating indicator
         if full_text:
-            self._floating_indicator.set_status("Done!", "#84cc16")
+            self._floating_indicator.set_status(tr("Done!"), "#84cc16")
         else:
-            self._floating_indicator.set_status("No speech detected", "#f59e0b")
+            self._floating_indicator.set_status(tr("No speech detected"), "#f59e0b")
 
         QTimer.singleShot(1500, self._floating_indicator.set_idle)
         self._finish_indicator_activity()
@@ -2585,19 +2655,19 @@ class TurboWhisper:
         if self._focus_lost_during_recording:
             logger.info("_stop_batch_recording: focus lost — discarding audio")
             self.recorder.stop()
-            self._floating_indicator.set_status("Cancelled", "#f59e0b")
+            self._floating_indicator.set_status(tr("Cancelled"), "#f59e0b")
             self._floating_indicator.set_idle()
             self._finish_indicator_activity()
             return
 
-        self._floating_indicator.set_status("Processing...", "#f59e0b")
+        self._floating_indicator.set_status(tr("Processing..."), "#f59e0b")
         self._floating_indicator.set_processing()
         audio_data = self.recorder.stop()
         print(f"_stop_batch_recording: got {len(audio_data)} bytes of audio")
 
         if len(audio_data) < self.config.min_audio_bytes:
             print(f"_stop_recording: too short ({len(audio_data)} < {self.config.min_audio_bytes}), aborting")
-            self._floating_indicator.set_status("Too short", "#f59e0b")
+            self._floating_indicator.set_status(tr("Too short"), "#f59e0b")
             self._floating_indicator.set_idle()
             self._finish_indicator_activity()
             return
@@ -2689,7 +2759,7 @@ class TurboWhisper:
         # Don't insert text if target window lost focus
         if self._focus_lost_during_recording:
             logger.info("Transcription complete but focus was lost — discarding result")
-            self._floating_indicator.set_status("Cancelled (focus lost)", "#f59e0b")
+            self._floating_indicator.set_status(tr("Cancelled (focus lost)"), "#f59e0b")
             QTimer.singleShot(1500, self._floating_indicator.set_idle)
             self._finish_indicator_activity()
             return
@@ -2705,7 +2775,7 @@ class TurboWhisper:
                         audio_path.unlink()
                     except OSError:
                         pass
-            self._floating_indicator.set_status("No speech detected", "#f59e0b")
+            self._floating_indicator.set_status(tr("No speech detected"), "#f59e0b")
             QTimer.singleShot(1500, self._floating_indicator.set_idle)
             self._finish_indicator_activity()
             return
@@ -2714,7 +2784,7 @@ class TurboWhisper:
         clean_text = _clean_hallucination(text.strip())
         if clean_text is None:
             logger.debug(f"Batch mode: model artifact '{text.strip()[:50]}', skipping")
-            self._floating_indicator.set_status("No speech detected", "#f59e0b")
+            self._floating_indicator.set_status(tr("No speech detected"), "#f59e0b")
             QTimer.singleShot(1500, self._floating_indicator.set_idle)
             self._finish_indicator_activity()
             return
@@ -2732,11 +2802,11 @@ class TurboWhisper:
                 logger.info(f"INSERTING text ({len(clean_text)} chars): '{clean_text[:100]}'")
                 result = self.typer.type_text(clean_text)
                 logger.info(f"typer.type_text returned {result}")
-                self._floating_indicator.set_status("Done!", "#84cc16")
+                self._floating_indicator.set_status(tr("Done!"), "#84cc16")
             else:
-                self._floating_indicator.set_status("Copied (Claude busy)", "#f59e0b")
+                self._floating_indicator.set_status(tr("Copied (Claude busy)"), "#f59e0b")
         else:
-            self._floating_indicator.set_status("Done!", "#84cc16")
+            self._floating_indicator.set_status(tr("Done!"), "#84cc16")
 
         QTimer.singleShot(1500, self._floating_indicator.set_idle)
         self._finish_indicator_activity()
@@ -2832,7 +2902,7 @@ class TurboWhisper:
         if not self.config.api_key or not self.config.api_key.strip():
             msg = "API key not configured — open settings and enter your key"
             print(f"[WARNING] {msg}", file=sys.stderr)
-            self._floating_indicator.set_status("No API key", "#f59e0b",
+            self._floating_indicator.set_status(tr("No API key"), "#f59e0b",
                 "Open settings and enter API key")
         else:
             print("[OK] API key configured, validating in background...", file=sys.stderr)
@@ -2845,7 +2915,7 @@ class TurboWhisper:
                         resp = client.options(self.config.api_url, headers=headers)
                         if resp.status_code == 401:
                             print("[ERROR] API key is invalid (401 Unauthorized)", file=sys.stderr)
-                            self._floating_indicator.set_status("Invalid API key", "#ef4444",
+                            self._floating_indicator.set_status(tr("Invalid API key"), "#ef4444",
                                 "Open settings and check API key")
                         elif resp.status_code < 500:
                             print("[OK] API key validated successfully", file=sys.stderr)

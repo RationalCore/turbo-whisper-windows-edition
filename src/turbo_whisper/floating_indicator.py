@@ -65,6 +65,11 @@ class FloatingIndicator(QWidget):
 
         # Status
         self._status_text = f"Press {hotkey_str} to dictate"
+        try:
+            from turbo_whisper.i18n import tr
+            self._status_text = tr("Press {hotkey_str} to dictate").replace("{hotkey_str}", hotkey_str)
+        except ImportError:
+            pass
         self._status_color = QColor("#888888")
         self._sub_text = ""
         self._sub_color = QColor("#666666")
@@ -110,6 +115,11 @@ class FloatingIndicator(QWidget):
     def set_idle(self):
         """Set to idle state with hotkey hint."""
         self._status_text = f"Press {self._hotkey_str} to dictate"
+        try:
+            from turbo_whisper.i18n import tr
+            self._status_text = tr("Press {self._hotkey_str} to dictate").replace("{self._hotkey_str}", self._hotkey_str)
+        except ImportError:
+            pass
         self._status_color = QColor("#888888")
         self._sub_text = ""
         self._target_level = 0.0
