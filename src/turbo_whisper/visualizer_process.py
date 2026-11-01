@@ -26,8 +26,23 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QObject, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
+
+# App icon SVG (M10) — keep in sync with turbo_whisper.icons._ICON_APP.
+# Drawn to the left of the equalizer in the indicator window.
+_ICON_APP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1E293B"/><stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="163" y="8" width="187" height="248" rx="93" fill="#FFFFFF"/>
+  <path d="M 46 206 A 212 212 0 0 0 466 206" stroke="#FFFFFF" stroke-width="44" fill="none" stroke-linecap="round"/>
+  <rect x="238" y="382" width="36" height="88" fill="#FFFFFF"/>
+  <rect x="176" y="467" width="164" height="29" rx="14" fill="#FFFFFF"/>
+</svg>"""
 
 logger = logging.getLogger("turbo_whisper.visualizer")
 
@@ -57,8 +72,8 @@ class _IndicatorWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self._full_size = (220, 88)
-        self._compact_size = (110, 44)
+        self._full_size = (250, 82)
+        self._compact_size = (132, 38)
         self._compact = False  # True = half-size window (waveform only)
         self._width, self._height = self._full_size
         self.setFixedSize(self._width, self._height)
@@ -86,6 +101,7 @@ class _IndicatorWindow(QWidget):
         self._minimize_hover = False
         self._mouse_inside = False  # minimize button shows only on hover
         self.setMouseTracking(True)
+        self._app_icon_pm = self._render_app_icon()
 
         self._current_level = 0.0
         self._target_level = 0.0
@@ -100,6 +116,7 @@ class _IndicatorWindow(QWidget):
         self._bar_values = deque(maxlen=self._num_bars)
         self._scroll_offset = 0.0
         self._is_recording = False
+        self._busy = False  # True while finalizing/transcribing (grey animated)
         self._bg_alpha = 235  # matches default config indicator_opacity
         self._frame_count = 0
         self._always_on_top = True
@@ -143,10 +160,13 @@ class _IndicatorWindow(QWidget):
         self._status_color = QColor("#888888")
         self._sub_text = ""
         self._target_level = 0.0
+        self._is_recording = False
+        self._busy = False
 
     def set_recording(self, active: bool):
-        """Switch between recording (green) and idle (grey) color scheme."""
+        """Switch between recording (green animated) and idle (grey static)."""
         self._is_recording = active
+        self._busy = False
 
     def set_opacity(self, value: int):
         """Set background opacity (15-255, 255=opaque).
@@ -176,6 +196,26 @@ class _IndicatorWindow(QWidget):
             self.show()
 
     # ── position persistence ─────────────────────────────────────────────
+
+    def _render_app_icon(self):
+        """Render the app icon SVG to a pixmap (drawn left of the bars)."""
+        try:
+            from PyQt6.QtSvg import QSvgRenderer
+            r = QSvgRenderer(_ICON_APP_SVG.encode("utf-8"))
+            pm = QPixmap(64, 64)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            r.render(p)
+            p.end()
+            return pm
+        except Exception as e:
+            logger.info("Icon render failed: %s", e)
+            return None
+
+    def set_processing(self):
+        """Finalizing/transcribing: bars turn grey but keep moving."""
+        self._is_recording = False
+        self._busy = True
 
     def _apply_size(self, compact: bool):
         """Switch between full and compact (half) size, keeping top-left."""
@@ -482,7 +522,14 @@ class _IndicatorWindow(QWidget):
         painter.setPen(QPen(QColor(80, 80, 100, self._bg_alpha), 1))
         painter.drawRoundedRect(0, 0, w, h, 8, 8)
 
-        # 2. Opaque background under the waveform bars so they stay
+        # 2. App icon (custom-drawn) — left of the equalizer, both modes
+        icon_size = 16 if self._compact else 26
+        ix, iy = 8, (h - icon_size) // 2
+        if self._app_icon_pm is not None:
+            painter.drawPixmap(ix, iy, icon_size, icon_size, self._app_icon_pm)
+        bars_x = ix + icon_size + 8
+
+        # 3. Opaque background under the waveform bars so they stay
         #    clearly visible at any opacity setting.
         bars_bg = QColor(15, 15, 25, min(255, self._bg_alpha + 20))
         painter.setBrush(bars_bg)
@@ -491,8 +538,8 @@ class _IndicatorWindow(QWidget):
             bars_y, bars_bg_h, bars_h = 4, h - 8, h - 12
         else:
             bars_y, bars_bg_h, bars_h = 6, 46, 43
-        painter.drawRoundedRect(6, bars_y, w - 12, bars_bg_h, 6, 6)
-        self._draw_waveform_bars(painter, 8, bars_y + 2, w - 16, bars_h)
+        painter.drawRoundedRect(bars_x - 2, bars_y, w - bars_x - 6, bars_bg_h, 6, 6)
+        self._draw_waveform_bars(painter, bars_x, bars_y + 2, w - bars_x - 10, bars_h)
 
         # 3. Status texts + version — full mode only.
         #    Compact mode shows just the bar (plus the minimize button).
@@ -541,12 +588,28 @@ class _IndicatorWindow(QWidget):
 
         painter.end()
 
+    # Static pattern for the idle state (frozen bars, varied heights)
+    _STATIC_PATTERN = (0.5, 0.85, 1.0, 0.62, 0.92, 0.7, 1.0, 0.55, 0.88, 0.66, 0.95, 0.6)
+
     def _draw_waveform_bars(self, painter, x, y, width, height):
         bar_w = max(2, (width - (self._num_bars - 1) * 2) // self._num_bars)
         gap = 2
         tw = self._num_bars * (bar_w + gap) - gap
         sx = x + (width - tw) // 2
         mid_y = y + height / 2
+
+        # Idle: frozen grey bars (the app is waiting for the hotkey)
+        if not self._is_recording and not self._busy:
+            painter.setPen(Qt.PenStyle.NoPen)
+            for i in range(self._num_bars):
+                val = self._STATIC_PATTERN[i % len(self._STATIC_PATTERN)]
+                bar_h = max(3, val * height * 0.85)
+                bx = sx + i * (bar_w + gap)
+                by = mid_y - bar_h / 2
+                color = QColor(148, 163, 184, 130)
+                painter.setBrush(color)
+                painter.drawRoundedRect(QRectF(bx, by, bar_w, bar_h), 2, 2)
+            return
 
         for i in range(self._num_bars):
             pos = (i + self._scroll_offset) * 0.4
@@ -576,15 +639,16 @@ class _IndicatorWindow(QWidget):
                     color = QColor(60, 100, 40)
                     alpha = 255
             else:
+                # Finalizing/transcribing: grey but still moving
                 if val > 0.5:
-                    color = QColor(255, 255, 255)
-                    alpha = 200
+                    color = QColor(148, 163, 184)
+                    alpha = 220
                 elif val > 0.2:
-                    color = QColor(255, 255, 255)
-                    alpha = 140
+                    color = QColor(148, 163, 184)
+                    alpha = 170
                 else:
-                    color = QColor(255, 255, 255)
-                    alpha = 80
+                    color = QColor(148, 163, 184)
+                    alpha = 110
             color.setAlpha(alpha)
             painter.setBrush(color)
             painter.setPen(Qt.PenStyle.NoPen)
@@ -679,6 +743,8 @@ def main():
             window.set_idle()
         elif t == "recording":
             window.set_recording(cmd.get("active", False))
+        elif t == "processing":
+            window.set_processing()
         elif t == "hotkey":
             window._hotkey_str = cmd.get("text", "F8")
             window.set_idle()

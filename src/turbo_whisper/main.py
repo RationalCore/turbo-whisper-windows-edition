@@ -2510,6 +2510,7 @@ class TurboWhisper:
 
         # 4. Show Finishing... while we process remaining
         self._floating_indicator.set_status("Finishing...", "#f59e0b")
+        self._floating_indicator.set_processing()
 
         # 5. Wait for the transcription worker to drain queued chunks (max 10s)
         wait_start = time.time()
@@ -2590,6 +2591,7 @@ class TurboWhisper:
             return
 
         self._floating_indicator.set_status("Processing...", "#f59e0b")
+        self._floating_indicator.set_processing()
         audio_data = self.recorder.stop()
         print(f"_stop_batch_recording: got {len(audio_data)} bytes of audio")
 

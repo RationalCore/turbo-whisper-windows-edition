@@ -499,6 +499,10 @@ class FloatingIndicatorProcess:
         """Notify visualizer whether recording is active (green) or idle (grey)."""
         self._send({"type": "recording", "active": active})
 
+    def set_processing(self):
+        """Finalizing/transcribing: bars turn grey but keep moving."""
+        self._send({"type": "processing"})
+
     def set_opacity(self, value: int):
         """Set visualizer window opacity (15-255, 255=opaque)."""
         self._send({"type": "opacity", "value": value})
