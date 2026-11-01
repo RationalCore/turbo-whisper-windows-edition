@@ -504,6 +504,13 @@ class RecordingWindow(QWidget):
         api_form.setSpacing(4)
         api_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
+        # Local (offline) recognition gates the API settings below
+        self.local_recognition_cb = QCheckBox(tr("Local recognition (offline)"))
+        self.local_recognition_cb.setChecked(self.config.local_recognition)
+        self.local_recognition_cb.setToolTip(tr("Transcribe locally: GigaAM for Russian,\nParakeet for other languages. Models are\ndownloaded on first use, then work offline."))
+        self.local_recognition_cb.stateChanged.connect(self._on_local_recognition_toggled)
+        api_form.addRow(tr("Engine:"), self.local_recognition_cb)
+
         self.api_url_input = QLineEdit(self.config.api_url)
         self.api_url_input.setPlaceholderText(tr("https://api.openai.com/v1/audio/transcriptions"))
         api_form.addRow(tr("URL:"), self.api_url_input)
@@ -940,6 +947,20 @@ class RecordingWindow(QWidget):
         self._update_streaming_ui_visibility()
         self._apply_settings()
 
+    def _on_local_recognition_toggled(self, state) -> None:
+        """Toggle local recognition and enable/disable API controls."""
+        self._update_api_controls_enabled()
+        self._apply_settings()
+
+    def _update_api_controls_enabled(self) -> None:
+        """API provider/model/key are disabled while local recognition is on."""
+        local = (self.local_recognition_cb.isChecked()
+                 if hasattr(self, 'local_recognition_cb') else self.config.local_recognition)
+        for attr in ('api_url_input', 'model_combo', 'api_key_input', 'key_visible_btn',
+                     'fetch_models_btn'):
+            if hasattr(self, attr):
+                getattr(self, attr).setEnabled(not local)
+
     def _update_streaming_ui_visibility(self) -> None:
         """Update visibility of streaming-related UI elements."""
         is_streaming = self.streaming_cb.isChecked() if hasattr(self, 'streaming_cb') else self.config.streaming_mode
@@ -1325,6 +1346,7 @@ class RecordingWindow(QWidget):
         self.api_url_input.editingFinished.connect(self._apply_settings)
         self.api_key_input.editingFinished.connect(self._apply_settings)
         self.language_combo.currentIndexChanged.connect(self._apply_settings)
+        self._update_api_controls_enabled()
         # Audio
         self.mic_combo.currentIndexChanged.connect(self._apply_settings)
         # Hotkey
@@ -1371,6 +1393,8 @@ class RecordingWindow(QWidget):
         self.config.auto_paste = self.auto_paste_cb.isChecked()
         self.config.copy_to_clipboard = self.copy_clipboard_cb.isChecked()
         self.config.use_character_typing = self.char_typing_cb.isChecked()
+        if hasattr(self, 'local_recognition_cb'):
+            self.config.local_recognition = self.local_recognition_cb.isChecked()
         self.config.store_recordings = self.store_recordings_cb.isChecked()
         self.config.auto_start = self.auto_start_cb.isChecked()
         # Indicator
@@ -1616,6 +1640,14 @@ class TurboWhisper:
         self.window = RecordingWindow(self.config)
         self._wire_window()
         self._setup_tray()
+
+        # Warm up the local ASR engine in the background (offline mode)
+        if getattr(self.config, "local_recognition", False):
+            try:
+                from turbo_whisper.local_asr import get_local_asr
+                get_local_asr().warmup(self.config.language)
+            except Exception as e:
+                logger.info(f"Local ASR warmup failed: {e}")
 
         self.is_recording = False
         self.is_processing = False
@@ -1915,6 +1947,23 @@ class TurboWhisper:
         # Restore idle microphone feedback for the waveform
         if not self.recorder.is_recording:
             self._start_background_mic()
+
+    def _transcribe_audio(self, audio_bytes: bytes, prompt: str | None = None) -> str:
+        """Transcribe audio via local engines (default) or the configured API."""
+        if getattr(self.config, "local_recognition", False):
+            from turbo_whisper.i18n import tr
+            from turbo_whisper.local_asr import get_local_asr
+            lasr = get_local_asr()
+            if not lasr.is_downloaded(self.config.language):
+                base = tr("Downloading model...")
+                self._floating_indicator.set_status(base, "#f59e0b")
+
+                def _prog(p):
+                    self._floating_indicator.set_status(f"{base} {int(p * 100)}%", "#f59e0b")
+
+                lasr.ensure_for(self.config.language, progress=_prog)
+            return lasr.transcribe(audio_bytes, self.config.language)
+        return self.client.transcribe_sync(audio_bytes, prompt=prompt)
 
     def _copy_last_transcription(self) -> None:
         """Copy the most recent transcription to clipboard."""
@@ -2324,7 +2373,7 @@ class TurboWhisper:
                 logger.info(f"transcribe_chunk #{chunk_seq}: calling API "
                             f"(prompt_len={len(context)})...")
                 try:
-                    text = self.client.transcribe_sync(chunk_audio, prompt=context or None)
+                    text = self._transcribe_audio(chunk_audio, prompt=context or None)
                 except Exception as e:
                     logger.error(f"transcribe_chunk #{chunk_seq}: API FAILED: {e}")
                     err_str = str(e)
@@ -2602,7 +2651,7 @@ class TurboWhisper:
             logger.info(f"Processing final chunk: {len(remaining_chunk)} bytes")
             try:
                 context = self._current_session_text[-300:] if self._current_session_text else ""
-                text = self.client.transcribe_sync(remaining_chunk, prompt=context or None)
+                text = self._transcribe_audio(remaining_chunk, prompt=context or None)
                 if text:
                     clean_text = _clean_hallucination(text.strip())
                     if clean_text and tail_had_overlap:
@@ -2698,7 +2747,7 @@ class TurboWhisper:
 
         def transcribe():
             try:
-                text = self.client.transcribe_sync(audio_data)
+                text = self._transcribe_audio(audio_data)
                 self.signals.transcription_complete.emit(text)
             except WhisperAPIError as e:
                 self.signals.transcription_error.emit(str(e))

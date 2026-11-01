@@ -61,6 +61,7 @@ class Config:
     auto_start: bool = True  # Auto-start Turbo Whisper on Windows login
     language: str = "ru"
     ui_language: str = ""  # UI language code (empty = first run, show picker)
+    local_recognition: bool = True  # Offline ASR (GigaAM/Parakeet) instead of API
     use_character_typing: bool = False  # False = clipboard paste (Ctrl+V), True = char-by-char
     typing_delay_ms: int = 5  # Milliseconds between keystrokes (only used if use_character_typing=True)
 
