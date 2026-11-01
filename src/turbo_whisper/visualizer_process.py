@@ -29,7 +29,7 @@ from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QObject, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
 
-# App icon SVG (M10) — keep in sync with turbo_whisper.icons._ICON_APP.
+# App icon SVG (M10, final) — keep in sync with turbo_whisper.icons._ICON_APP.
 # Drawn to the left of the equalizer in the indicator window.
 _ICON_APP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
@@ -38,10 +38,14 @@ _ICON_APP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect x="163" y="8" width="187" height="248" rx="93" fill="#FFFFFF"/>
-  <path d="M 46 206 A 212 212 0 0 0 466 206" stroke="#FFFFFF" stroke-width="44" fill="none" stroke-linecap="round"/>
-  <rect x="238" y="382" width="36" height="88" fill="#FFFFFF"/>
-  <rect x="176" y="467" width="164" height="29" rx="14" fill="#FFFFFF"/>
+  <path d="M 103 96 A 156 156 0 0 1 103 158" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 409 96 A 156 156 0 0 0 409 158" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 52 85 A 208 208 0 0 1 52 169" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 460 85 A 208 208 0 0 0 460 169" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <rect x="178" y="8" width="156" height="233" rx="78" fill="#FFFFFF"/>
+  <path d="M 53 206 A 225 225 0 0 0 459 206" stroke="#FFFFFF" stroke-width="42" fill="none" stroke-linecap="round"/>
+  <rect x="239" y="312" width="34" height="166" fill="#FFFFFF"/>
+  <rect x="177" y="477" width="159" height="27" rx="14" fill="#FFFFFF"/>
 </svg>"""
 
 logger = logging.getLogger("turbo_whisper.visualizer")
@@ -598,8 +602,11 @@ class _IndicatorWindow(QWidget):
 
         painter.end()
 
-    # Static pattern for the idle state (frozen bars, varied heights)
-    _STATIC_PATTERN = (0.5, 0.85, 1.0, 0.62, 0.92, 0.7, 1.0, 0.55, 0.88, 0.66, 0.95, 0.6)
+    # Static pattern for the idle state: an organic frozen-waveform snapshot
+    # (irregular, not symmetric) — clearly different from the live equalizer
+    _STATIC_PATTERN = (0.28, 0.46, 0.62, 0.55, 0.38, 0.22, 0.34, 0.58, 0.68, 0.5,
+                       0.32, 0.24, 0.4, 0.54, 0.62, 0.44, 0.3, 0.2, 0.36, 0.5,
+                       0.6, 0.48, 0.34, 0.26)
 
     def _draw_waveform_bars(self, painter, x, y, width, height):
         bar_w = max(2, (width - (self._num_bars - 1) * 2) // self._num_bars)
@@ -608,17 +615,20 @@ class _IndicatorWindow(QWidget):
         sx = x + (width - tw) // 2
         mid_y = y + height / 2
 
-        # Idle: frozen grey bars (the app is waiting for the hotkey)
+        # Idle: frozen grey bars (the app is waiting for the hotkey).
+        # Thinner and shorter than live bars, with an irregular waveform
+        # shape so they read as a paused real signal.
         if not self._is_recording and not self._busy:
             painter.setPen(Qt.PenStyle.NoPen)
+            thin_w = max(2, int(bar_w * 0.62))
             for i in range(self._num_bars):
                 val = self._STATIC_PATTERN[i % len(self._STATIC_PATTERN)]
-                bar_h = max(3, val * height * 0.85)
-                bx = sx + i * (bar_w + gap)
+                bar_h = max(3, val * height * 0.62)
+                bx = sx + i * (bar_w + gap) + (bar_w - thin_w) // 2
                 by = mid_y - bar_h / 2
-                color = QColor(148, 163, 184, 130)
+                color = QColor(148, 163, 184, 110)
                 painter.setBrush(color)
-                painter.drawRoundedRect(QRectF(bx, by, bar_w, bar_h), 2, 2)
+                painter.drawRoundedRect(QRectF(bx, by, thin_w, bar_h), 2, 2)
             return
 
         for i in range(self._num_bars):

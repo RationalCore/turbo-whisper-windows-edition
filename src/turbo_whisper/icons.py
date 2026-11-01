@@ -118,27 +118,23 @@ def get_stop_icon(size: int = 20, color: str = "#888888") -> QIcon:
     return _svg_to_icon(ICON_STOP, size, color)
 
 
-# App icon (V6): dark-grey microphone with equalizer bars on an
-# indigo -> violet -> cyan gradient. Static: does not change with app state.
+# App icon (M10, final): giant white microphone with cyan sound waves on a
+# dark slate gradient. Static: does not change with app state.
 _ICON_APP = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4F46E5"/>
-      <stop offset="0.55" stop-color="#7C3AED"/>
-      <stop offset="1" stop-color="#06B6D4"/>
+      <stop offset="0" stop-color="#1E293B"/><stop offset="1" stop-color="#0F172A"/>
     </linearGradient>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
-  <rect x="214.2" y="110" width="83.6" height="171" rx="41.8" fill="#2E3238"/>
-  <path d="M 170.5 243 A 87.4 87.4 0 0 0 341.5 243" stroke="#2E3238" stroke-width="22.8" fill="none" stroke-linecap="round"/>
-  <rect x="245.55" y="324.7" width="20.9" height="41.8" fill="#2E3238"/>
-  <rect x="195.2" y="360.8" width="121.6" height="22.8" rx="11.4" fill="#2E3238"/>
-  <g fill="#F0FDF4">
-    <rect x="92" y="230" width="26" height="110" rx="13"/>
-    <rect x="132" y="186" width="26" height="198" rx="13"/>
-    <rect x="354" y="186" width="26" height="198" rx="13"/>
-    <rect x="394" y="230" width="26" height="110" rx="13"/>
-  </g>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M 103 96 A 156 156 0 0 1 103 158" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 409 96 A 156 156 0 0 0 409 158" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 52 85 A 208 208 0 0 1 52 169" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 460 85 A 208 208 0 0 0 460 169" stroke="#22D3EE" stroke-width="22" fill="none" stroke-linecap="round" opacity="0.55"/>
+  <rect x="178" y="8" width="156" height="233" rx="78" fill="#FFFFFF"/>
+  <path d="M 53 206 A 225 225 0 0 0 459 206" stroke="#FFFFFF" stroke-width="42" fill="none" stroke-linecap="round"/>
+  <rect x="239" y="312" width="34" height="166" fill="#FFFFFF"/>
+  <rect x="177" y="477" width="159" height="27" rx="14" fill="#FFFFFF"/>
 </svg>"""
 
 
