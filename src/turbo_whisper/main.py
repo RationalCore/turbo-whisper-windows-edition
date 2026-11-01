@@ -254,7 +254,11 @@ def _setup_logger() -> logging.Logger:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         handler.setFormatter(formatter)
-        logger.addHandler(handler)
+        # Attach to the parent logger so messages from all modules
+        # (turbo-whisper.typer, turbo-whisper.local_asr, ...) reach the file
+        root_logger = logging.getLogger("turbo-whisper")
+        root_logger.setLevel(logging.DEBUG)
+        root_logger.addHandler(handler)
 
     return logger
 
@@ -1642,12 +1646,17 @@ class TurboWhisper:
         self._setup_tray()
 
         # Warm up the local ASR engine in the background (offline mode)
+        threading.excepthook = lambda args: logger.info(
+            f"Thread crashed: {args.exc_value!r}")
         if getattr(self.config, "local_recognition", False):
+            logger.info("Local ASR: warmup starting")
             try:
                 from turbo_whisper.local_asr import get_local_asr
                 get_local_asr().warmup(self.config.language)
             except Exception as e:
                 logger.info(f"Local ASR warmup failed: {e}")
+        else:
+            logger.info("Local ASR: disabled in settings")
 
         self.is_recording = False
         self.is_processing = False

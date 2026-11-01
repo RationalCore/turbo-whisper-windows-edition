@@ -148,11 +148,36 @@ def ensure_parakeet(progress=None) -> Path:
 
 # ── engines ────────────────────────────────────────────────────────────────
 
+def _import_onnxruntime():
+    """Import onnxruntime, fixing the PyInstaller stub-package issue.
+
+    In frozen builds the root package comes from the PYZ archive and its
+    submodules (onnxruntime.capi.*) are not reachable through it, leaving a
+    stub without SessionOptions. The full package is bundled as data - load
+    it explicitly when the stub is detected.
+    """
+    import sys
+    import onnxruntime
+    if hasattr(onnxruntime, "SessionOptions"):
+        return onnxruntime
+    import importlib.util
+    from pathlib import Path
+    base = Path(getattr(sys, "_MEIPASS", "")) / "onnxruntime"
+    if base.exists():
+        spec = importlib.util.spec_from_file_location(
+            "onnxruntime", base / "__init__.py",
+            submodule_search_locations=[str(base)])
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["onnxruntime"] = mod
+        spec.loader.exec_module(mod)
+        return mod
+    return onnxruntime
+
 class GigaAMEngine:
     """GigaAM v3 e2e_ctc (QUInt8 ONNX) for Russian. ~1.2s for 20s audio on CPU."""
 
     def __init__(self, model_dir: Path):
-        import onnxruntime as rt
+        rt = _import_onnxruntime()
         import sentencepiece as spm
 
         opts = rt.SessionOptions()
@@ -233,15 +258,18 @@ class LocalASR:
         """Load the engine for the language in a background thread (startup)."""
         def _run():
             try:
+                name = self.engine_for(language)
+                logger.info("Local ASR warmup: engine=%s downloaded=%s",
+                            name, self.is_downloaded(language))
                 with self._lock:
-                    name = self.engine_for(language)
                     if name not in self._engines and self.is_downloaded(language):
+                        logger.info("Local ASR warmup: loading %s...", name)
                         model_dir = ensure_gigaam() if name == "gigaam" else ensure_parakeet()
                         self._engines[name] = (GigaAMEngine(model_dir)
                                                if name == "gigaam" else ParakeetEngine(model_dir))
                         logger.info("Local ASR warmed up: %s", name)
             except Exception as e:
-                logger.info("Warmup skipped: %s", e)
+                logger.info("Warmup skipped: %r", e)
         threading.Thread(target=_run, daemon=True).start()
 
     @staticmethod

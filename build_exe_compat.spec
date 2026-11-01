@@ -5,6 +5,26 @@
 
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files, copy_metadata
 
+# Local ASR engines: collect_all because collect_dynamic_libs alone leaves
+# onnxruntime.capi out ("no attribute 'SessionOptions'" in frozen builds)
+from PyInstaller.utils.hooks import collect_all as _collect_all
+_ort_d, _ort_b, _ort_h = _collect_all("onnxruntime")
+_sp_d, _sp_b, _sp_h = _collect_all("sentencepiece")
+_sh_d, _sh_b, _sh_h = _collect_all("sherpa_onnx")
+hiddenimports = ["turbo_whisper.local_asr"] + _ort_h + _sp_h + _sh_h
+binaries_extra = _ort_b + _sp_b + _sh_b
+asr_datas = _ort_d + _sp_d + _sh_d
+
+# The onnxruntime native bindings must sit next to the bundled package data
+# (modulegraph cannot resolve them as hidden imports on this setup).
+import onnxruntime as _ort_mod
+import os as _os
+_ort_dir = _os.path.join(_os.path.dirname(_ort_mod.__file__), "capi")
+for _f in ("onnxruntime_pybind11_state.pyd", "onnxruntime.dll", "onnxruntime_providers_shared.dll"):
+    _p = _os.path.join(_ort_dir, _f)
+    if _os.path.exists(_p):
+        binaries_extra.append((_p, "onnxruntime/capi"))
+
 # Generate the exe version resource from pyproject.toml at build time
 # (so the built exe is never anonymous and never carries a stale version).
 import sys
@@ -23,14 +43,14 @@ pyaudio_bins = collect_dynamic_libs('pyaudio')
 a = Analysis(
     ['src\\turbo_whisper\\main.py'],
     pathex=[],
-    binaries=pyqt6_bins + pyaudio_bins,
+    binaries=pyqt6_bins + pyaudio_bins + binaries_extra,
     datas=[
         ('config.example.json', '.'),
         ('assets\\logo.svg', 'assets'),
         ('src\\turbo_whisper\\assets\\base_hallucination_filter.json', 'turbo_whisper\\assets'),
-    ] + pyqt6_datas + copy_metadata('turbo-whisper'),
-    hiddenimports=[
-        # PyQt6 — only modules actually used by the codebase
+    ] + pyqt6_datas + copy_metadata('turbo-whisper') + asr_datas,
+    hiddenimports=hiddenimports + [
+        # PyQt6 - only modules actually used by the codebase
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
