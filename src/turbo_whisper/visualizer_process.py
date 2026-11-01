@@ -722,6 +722,14 @@ def main():
     )
     logger.info("Visualizer process started (pid=%d)", os.getpid())
 
+    # Status texts arrive as UTF-8 over stdin; on non-English Windows the
+    # default stdin encoding is the ANSI codepage (mojibake without this).
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     # Load UI language for status texts (e.g. the idle hint)
     try:
         import json as _json

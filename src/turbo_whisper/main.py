@@ -1893,7 +1893,13 @@ class TurboWhisper:
         only shown temporarily, and restarts the background mic for idle
         waveform feedback.
         """
-        self._floating_indicator.set_recording(False)
+        # Deactivate the recording look only when no session is active —
+        # a previous session finishing must not grey out a new one.
+        streaming_busy = (getattr(self, "_chunk_worker_busy", False)
+                          or not self._chunk_input_queue.empty()
+                          or self.is_stopping)
+        if not self.is_recording and not self.is_processing and not streaming_busy:
+            self._floating_indicator.set_recording(False)
         self._indicator_activity_id += 1
         activity_id = self._indicator_activity_id
 
