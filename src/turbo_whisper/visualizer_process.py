@@ -101,7 +101,7 @@ class _IndicatorWindow(QWidget):
         self._minimize_hover = False
         self._mouse_inside = False  # minimize button shows only on hover
         self.setMouseTracking(True)
-        self._app_icon_pm = self._render_app_icon()
+        self._icon_cache = {}
 
         self._current_level = 0.0
         self._target_level = 0.0
@@ -197,20 +197,25 @@ class _IndicatorWindow(QWidget):
 
     # ── position persistence ─────────────────────────────────────────────
 
-    def _render_app_icon(self):
-        """Render the app icon SVG to a pixmap (drawn left of the bars)."""
-        try:
-            from PyQt6.QtSvg import QSvgRenderer
-            r = QSvgRenderer(_ICON_APP_SVG.encode("utf-8"))
-            pm = QPixmap(64, 64)
-            pm.fill(Qt.GlobalColor.transparent)
-            p = QPainter(pm)
-            r.render(p)
-            p.end()
-            return pm
-        except Exception as e:
-            logger.info("Icon render failed: %s", e)
-            return None
+    def _app_icon_pm(self, size: int):
+        """Render the app icon SVG at the exact target size (crisp, no scaling)."""
+        pm = self._icon_cache.get(size)
+        if pm is None:
+            try:
+                from PyQt6.QtSvg import QSvgRenderer
+                r = QSvgRenderer(_ICON_APP_SVG.encode("utf-8"))
+                pm = QPixmap(size, size)
+                pm.fill(Qt.GlobalColor.transparent)
+                p = QPainter(pm)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                r.render(p)
+                p.end()
+                self._icon_cache[size] = pm
+            except Exception as e:
+                logger.info("Icon render failed: %s", e)
+                return None
+        return pm
 
     def set_processing(self):
         """Finalizing/transcribing: bars turn grey but keep moving."""
@@ -522,11 +527,20 @@ class _IndicatorWindow(QWidget):
         painter.setPen(QPen(QColor(80, 80, 100, self._bg_alpha), 1))
         painter.drawRoundedRect(0, 0, w, h, 8, 8)
 
-        # 2. App icon (custom-drawn) — left of the equalizer, both modes
+        # 2. Bars geometry first — the icon aligns with the equalizer row,
+        #    not with the window center.
+        if self._compact:
+            bars_y, bars_bg_h, bars_h = 4, h - 8, h - 12
+        else:
+            bars_y, bars_bg_h, bars_h = 6, 46, 43
+
+        # App icon (custom-drawn) — left of the equalizer, aligned with it
         icon_size = 16 if self._compact else 26
-        ix, iy = 8, (h - icon_size) // 2
-        if self._app_icon_pm is not None:
-            painter.drawPixmap(ix, iy, icon_size, icon_size, self._app_icon_pm)
+        ix = 8
+        iy = int(bars_y + 2 + bars_h / 2 - icon_size / 2)
+        pm = self._app_icon_pm(icon_size)
+        if pm is not None:
+            painter.drawPixmap(ix, iy, pm)  # native size — no rescaling
         bars_x = ix + icon_size + 8
 
         # 3. Opaque background under the waveform bars so they stay
@@ -534,10 +548,6 @@ class _IndicatorWindow(QWidget):
         bars_bg = QColor(15, 15, 25, min(255, self._bg_alpha + 20))
         painter.setBrush(bars_bg)
         painter.setPen(Qt.PenStyle.NoPen)
-        if self._compact:
-            bars_y, bars_bg_h, bars_h = 4, h - 8, h - 12
-        else:
-            bars_y, bars_bg_h, bars_h = 6, 46, 43
         painter.drawRoundedRect(bars_x - 2, bars_y, w - bars_x - 6, bars_bg_h, 6, 6)
         self._draw_waveform_bars(painter, bars_x, bars_y + 2, w - bars_x - 10, bars_h)
 

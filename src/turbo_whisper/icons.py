@@ -149,8 +149,14 @@ def get_tray_icon(size: int = 64, recording: bool = False) -> QIcon:
     recording — a recolored tray icon made the app look like a different
     program. The floating indicator shows the recording state instead.
 
+    A multi-resolution QIcon is built (16..64 px) so Windows always picks
+    an exact size without blurry rescaling.
+
     Args:
-        size: Icon size in pixels
+        size: Icon size in pixels (kept for call compatibility)
         recording: kept for call compatibility, unused
     """
-    return _svg_to_icon(_ICON_APP, size)
+    icon = QIcon()
+    for s in (16, 20, 24, 32, 48, 64):
+        icon.addPixmap(_svg_to_icon(_ICON_APP, s).pixmap(s, s))
+    return icon
