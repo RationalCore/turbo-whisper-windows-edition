@@ -26,31 +26,8 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QObject, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication, QPixmap
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QGuiApplication
 from PyQt6.QtWidgets import QApplication, QWidget
-
-# App icon SVG — keep in sync with turbo_whisper.icons._ICON_APP (inlined so
-# this process stays standalone). Drawn custom-style in the indicator window.
-_ICON_APP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4F46E5"/>
-      <stop offset="0.55" stop-color="#7C3AED"/>
-      <stop offset="1" stop-color="#06B6D4"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
-  <rect x="214.2" y="110" width="83.6" height="171" rx="41.8" fill="#2E3238"/>
-  <path d="M 170.5 243 A 87.4 87.4 0 0 0 341.5 243" stroke="#2E3238" stroke-width="22.8" fill="none" stroke-linecap="round"/>
-  <rect x="245.55" y="324.7" width="20.9" height="41.8" fill="#2E3238"/>
-  <rect x="195.2" y="360.8" width="121.6" height="22.8" rx="11.4" fill="#2E3238"/>
-  <g fill="#F0FDF4">
-    <rect x="92" y="230" width="26" height="110" rx="13"/>
-    <rect x="132" y="186" width="26" height="198" rx="13"/>
-    <rect x="354" y="186" width="26" height="198" rx="13"/>
-    <rect x="394" y="230" width="26" height="110" rx="13"/>
-  </g>
-</svg>"""
 
 logger = logging.getLogger("turbo_whisper.visualizer")
 
@@ -80,8 +57,8 @@ class _IndicatorWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self._full_size = (220, 100)
-        self._compact_size = (110, 50)
+        self._full_size = (220, 88)
+        self._compact_size = (110, 44)
         self._compact = False  # True = half-size window (waveform only)
         self._width, self._height = self._full_size
         self.setFixedSize(self._width, self._height)
@@ -90,6 +67,7 @@ class _IndicatorWindow(QWidget):
         self._is_dragging = False
         self._resizing = False
         self._resize_anchor = (0, 0)
+        self._resize_press = (0, 0)
         self._resize_sx = 1
         self._resize_sy = 1
         self._resize_by_width = True
@@ -107,7 +85,6 @@ class _IndicatorWindow(QWidget):
         )
         self._minimize_hover = False
         self.setMouseTracking(True)
-        self._app_icon_pm = self._render_app_icon()
 
         self._current_level = 0.0
         self._target_level = 0.0
@@ -199,21 +176,6 @@ class _IndicatorWindow(QWidget):
 
     # ── position persistence ─────────────────────────────────────────────
 
-    def _render_app_icon(self):
-        """Render the app icon SVG to a pixmap (drawn custom in the corner)."""
-        try:
-            from PyQt6.QtSvg import QSvgRenderer
-            r = QSvgRenderer(_ICON_APP_SVG.encode("utf-8"))
-            pm = QPixmap(64, 64)
-            pm.fill(Qt.GlobalColor.transparent)
-            p = QPainter(pm)
-            r.render(p)
-            p.end()
-            return pm
-        except Exception as e:
-            logger.info("Icon render failed: %s", e)
-            return None
-
     def _apply_size(self, compact: bool):
         """Switch between full and compact (half) size, keeping top-left."""
         self._compact = compact
@@ -226,6 +188,13 @@ class _IndicatorWindow(QWidget):
             self._btn_size,
         )
         self.update()
+
+    def _place_at_anchor(self):
+        """Keep the resize-anchor corner fixed while the size changed."""
+        ax, ay = self._resize_anchor
+        x = ax if self._resize_sx > 0 else ax - self._width + 1
+        y = ay if self._resize_sy > 0 else ay - self._height + 1
+        self.move(x, y)
 
     def showEvent(self, event):
         """Every show goes through position validation."""
@@ -367,6 +336,8 @@ class _IndicatorWindow(QWidget):
                 ax = g.left() if self._resize_sx > 0 else g.right()
                 ay = g.top() if self._resize_sy > 0 else g.bottom()
                 self._resize_anchor = (ax, ay)
+                self._resize_press = (event.globalPosition().toPoint().x(),
+                                      event.globalPosition().toPoint().y())
                 self._resizing = True
                 self._is_dragging = False
                 event.accept()
@@ -385,29 +356,26 @@ class _IndicatorWindow(QWidget):
             self.update()
 
         if self._resizing:
+            # Discrete jump between the two sizes: dragging slightly inward
+            # snaps to compact immediately, outward — back to full.
             gpos = event.globalPosition().toPoint()
             ax, ay = self._resize_anchor
-            dw = (gpos.x() - ax) * self._resize_sx
-            dh = (gpos.y() - ay) * self._resize_sy
-            full_w, full_h = self._full_size
-            # Size follows the grabbed axis: width for side borders, else height
-            target_w = dw if self._resize_by_width else dh * (full_w / full_h)
-            min_w = self._compact_size[0]
-            target_w = max(min_w, min(full_w, target_w))
-            new_w = int(round(target_w))
-            new_h = int(round(new_w * full_h / full_w))
-            self.setFixedSize(new_w, new_h)
-            x = ax if self._resize_sx > 0 else ax - new_w + 1
-            y = ay if self._resize_sy > 0 else ay - new_h + 1
-            self.move(x, y)
-            self._width, self._height = new_w, new_h
-            self._minimize_rect = QRectF(
-                new_w - self._btn_size - self._btn_margin,
-                self._btn_margin,
-                self._btn_size,
-                self._btn_size,
-            )
-            self.update()
+            px, py = self._resize_press
+            if self._resize_by_width:
+                cur = (gpos.x() - ax) * self._resize_sx
+                press = (px - ax) * self._resize_sx
+            else:
+                cur = (gpos.y() - ay) * self._resize_sy
+                press = (py - ay) * self._resize_sy
+            threshold = 6
+            if cur < press - threshold and not self._compact:
+                self._apply_size(True)
+                self._place_at_anchor()
+                self._save_position()
+            elif cur > press + threshold and self._compact:
+                self._apply_size(False)
+                self._place_at_anchor()
+                self._save_position()
             event.accept()
             return
 
@@ -442,15 +410,8 @@ class _IndicatorWindow(QWidget):
                 event.accept()
                 return
             if self._resizing:
-                # Snap to the nearest of the two sizes, keeping the anchor
+                # Size is already applied discretely during the drag
                 self._resizing = False
-                full_w, _ = self._full_size
-                compact = abs(self._width - self._compact_size[0]) < abs(self._width - full_w)
-                self._apply_size(compact)
-                ax, ay = self._resize_anchor
-                x = ax if self._resize_sx > 0 else ax - self._width + 1
-                y = ay if self._resize_sy > 0 else ay - self._height + 1
-                self.move(x, y)
                 self._save_position()
                 event.accept()
                 return
@@ -511,47 +472,50 @@ class _IndicatorWindow(QWidget):
         painter.setPen(QPen(QColor(80, 80, 100, self._bg_alpha), 1))
         painter.drawRoundedRect(0, 0, w, h, 8, 8)
 
-        # 2. Header: app icon (custom-drawn) + version — top-left in both modes
-        icon_size = 12 if self._compact else 22
-        ix, iy = 6, 5
-        if self._app_icon_pm is not None:
-            painter.drawPixmap(ix, iy, icon_size, icon_size, self._app_icon_pm)
-        if self._app_version:
-            vfont = QFont("Segoe UI", 6 if self._compact else 7)
-            painter.setFont(vfont)
-            painter.setPen(QColor(175, 175, 195, 210))
-            vtext = self._app_version if self._app_version.startswith("v") else f"v{self._app_version}"
-            painter.drawText(ix + icon_size + 5, iy + icon_size - 3, vtext)
-
-        # 3. Opaque background under the waveform bars so they stay
+        # 2. Opaque background under the waveform bars so they stay
         #    clearly visible at any opacity setting.
         bars_bg = QColor(15, 15, 25, min(255, self._bg_alpha + 20))
         painter.setBrush(bars_bg)
         painter.setPen(Qt.PenStyle.NoPen)
         if self._compact:
-            bars_y, bars_bg_h, bars_h = 22, 24, 21
+            bars_y, bars_bg_h, bars_h = 4, h - 8, h - 12
         else:
-            bars_y, bars_bg_h, bars_h = 30, 38, 34
+            bars_y, bars_bg_h, bars_h = 6, 46, 43
         painter.drawRoundedRect(6, bars_y, w - 12, bars_bg_h, 6, 6)
         self._draw_waveform_bars(painter, 8, bars_y + 2, w - 16, bars_h)
 
-        # 4. Status texts — full mode only (compact shows the bar alone)
+        # 3. Status texts + version — full mode only.
+        #    Compact mode shows just the bar (plus the minimize button).
         if not self._compact:
             font = QFont("Segoe UI", 10, QFont.Weight.Bold)
             painter.setFont(font)
             painter.setPen(self._status_color)
             metrics = painter.fontMetrics()
             tw = metrics.horizontalAdvance(self._status_text)
-            painter.drawText((w - tw) // 2, h - 16, self._status_text)
+            painter.drawText((w - tw) // 2, h - 20, self._status_text)
 
             if self._sub_text:
                 sf = QFont("Segoe UI", 8)
                 painter.setFont(sf)
                 painter.setPen(self._sub_color)
                 sw = metrics.horizontalAdvance(self._sub_text)
-                painter.drawText((w - sw) // 2, h - 3, self._sub_text)
+                painter.drawText((w - sw) // 2, h - 5, self._sub_text)
 
-        # Minimize button (top-right corner)
+            # Version label (bottom-right)
+            if self._app_version:
+                vfont = QFont("Segoe UI", 7)
+                painter.setFont(vfont)
+                painter.setPen(QColor(150, 150, 165, 160))
+                vtext = self._app_version if self._app_version.startswith("v") else f"v{self._app_version}"
+                vw = painter.fontMetrics().horizontalAdvance(vtext)
+                painter.drawText(w - vw - 8, h - 5, vtext)
+
+        # Minimize button (top-right corner). In compact mode it floats over
+        # the bars — an opaque backing keeps it clearly visible.
+        if self._compact:
+            painter.setBrush(QColor(15, 15, 25, 235))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(self._minimize_rect.adjusted(-3, -3, 3, 3))
         btn_color = QColor(120, 120, 140, 200) if self._minimize_hover else QColor(80, 80, 100, 140)
         painter.setBrush(btn_color)
         painter.setPen(Qt.PenStyle.NoPen)
