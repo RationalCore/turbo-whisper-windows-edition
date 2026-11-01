@@ -84,6 +84,7 @@ class _IndicatorWindow(QWidget):
             self._btn_size,
         )
         self._minimize_hover = False
+        self._mouse_inside = False  # minimize button shows only on hover
         self.setMouseTracking(True)
 
         self._current_level = 0.0
@@ -307,6 +308,15 @@ class _IndicatorWindow(QWidget):
 
     # ── drag + click-to-close + resize ──────────────────────────────────
 
+    def enterEvent(self, event):
+        self._mouse_inside = True
+        self.update()
+
+    def leaveEvent(self, event):
+        self._mouse_inside = False
+        self._minimize_hover = False
+        self.update()
+
     _RESIZE_MARGIN = 10
 
     def _resize_zone(self, pos):
@@ -510,22 +520,24 @@ class _IndicatorWindow(QWidget):
                 vw = painter.fontMetrics().horizontalAdvance(vtext)
                 painter.drawText(w - vw - 8, h - 5, vtext)
 
-        # Minimize button (top-right corner). In compact mode it floats over
-        # the bars — an opaque backing keeps it clearly visible.
-        if self._compact:
-            painter.setBrush(QColor(15, 15, 25, 235))
+        # Minimize button (top-right corner) — only visible while the mouse
+        # is inside the window. In compact mode it floats over the bars —
+        # an opaque backing keeps it clearly visible.
+        if self._mouse_inside or self._minimize_hover:
+            if self._compact:
+                painter.setBrush(QColor(15, 15, 25, 235))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(self._minimize_rect.adjusted(-3, -3, 3, 3))
+            btn_color = QColor(120, 120, 140, 200) if self._minimize_hover else QColor(80, 80, 100, 140)
+            painter.setBrush(btn_color)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(self._minimize_rect.adjusted(-3, -3, 3, 3))
-        btn_color = QColor(120, 120, 140, 200) if self._minimize_hover else QColor(80, 80, 100, 140)
-        painter.setBrush(btn_color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(self._minimize_rect)
-        # Draw "−" line
-        line_color = QColor(220, 220, 220) if self._minimize_hover else QColor(160, 160, 170)
-        painter.setPen(QPen(line_color, 1.5))
-        cx = self._minimize_rect.center().x()
-        cy = self._minimize_rect.center().y()
-        painter.drawLine(int(cx - 4), int(cy), int(cx + 4), int(cy))
+            painter.drawEllipse(self._minimize_rect)
+            # Draw "−" line
+            line_color = QColor(220, 220, 220) if self._minimize_hover else QColor(160, 160, 170)
+            painter.setPen(QPen(line_color, 1.5))
+            cx = self._minimize_rect.center().x()
+            cy = self._minimize_rect.center().y()
+            painter.drawLine(int(cx - 4), int(cy), int(cx + 4), int(cy))
 
         painter.end()
 
